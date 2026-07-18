@@ -1,70 +1,135 @@
 /**
- * Copyright 2016-present, Facebook, Inc.
- * All rights reserved.
- *
- * This source code is licensed under the license found in the
- * LICENSE file in the root directory of this source tree.
+ * Graph API Webhooks Sample
+ * Instagram -> Heroku -> Make
  */
 
-var bodyParser = require('body-parser');
-var express = require('express');
-var app = express();
-var xhub = require('express-x-hub');
+const express = require("express");
+const bodyParser = require("body-parser");
+const xhub = require("express-x-hub");
+const axios = require("axios");
 
-app.set('port', (process.env.PORT || 5000));
-app.listen(app.get('port'));
+const app = express();
 
-app.use(xhub({ algorithm: 'sha1', secret: process.env.APP_SECRET }));
+app.set("port", process.env.PORT || 5000);
+
+app.use(
+  xhub({
+    algorithm: "sha1",
+    secret: process.env.APP_SECRET,
+  })
+);
+
 app.use(bodyParser.json());
 
-var token = process.env.TOKEN || 'token';
-var received_updates = [];
+const VERIFY_TOKEN = process.env.TOKEN || "token";
 
-app.get('/', function(req, res) {
-  console.log(req);
-  res.send('<pre>' + JSON.stringify(received_updates, null, 2) + '</pre>');
+const MAKE_WEBHOOK =
+  "https://hook.eu1.make.com/r5b2fu92lxmvbrb5238hucahaotp2uot";
+
+let received_updates = [];
+
+app.get("/", function (req, res) {
+  res.send(
+    "<pre>" + JSON.stringify(received_updates, null, 2) + "</pre>"
+  );
 });
 
-app.get(['/facebook', '/instagram', '/threads'], function(req, res) {
+/**
+ * Webhook verification
+ */
+
+app.get(["/facebook", "/instagram", "/threads"], function (req, res) {
   if (
-    req.query['hub.mode'] == 'subscribe' &&
-    req.query['hub.verify_token'] == token
+    req.query["hub.mode"] === "subscribe" &&
+    req.query["hub.verify_token"] === VERIFY_TOKEN
   ) {
-    res.send(req.query['hub.challenge']);
-  } else {
-    res.sendStatus(400);
+    console.log("Webhook verified");
+    return res.status(200).send(req.query["hub.challenge"]);
   }
+
+  res.sendStatus(403);
 });
 
-app.post('/facebook', function(req, res) {
-  console.log('Facebook request body:', req.body);
+/**
+ * Facebook
+ */
+
+app.post("/facebook", function (req, res) {
+  console.log("Facebook request body:");
+  console.log(JSON.stringify(req.body, null, 2));
 
   if (!req.isXHubValid()) {
-    console.log('Warning - request header X-Hub-Signature not present or invalid');
-    res.sendStatus(401);
-    return;
+    console.log("Invalid X-Hub Signature");
+    return res.sendStatus(401);
   }
 
-  console.log('request header X-Hub-Signature validated');
-  // Process the Facebook updates here
   received_updates.unshift(req.body);
+
   res.sendStatus(200);
 });
 
-app.post('/instagram', function(req, res) {
-  console.log('Instagram request body:');
-  console.log(req.body);
-  // Process the Instagram updates here
+/**
+ * Instagram
+ */
+
+app.post("/instagram", async function (req, res) {
+
+  console.log("=======================================");
+  console.log("Instagram Webhook received");
+  console.log(JSON.stringify(req.body, null, 2));
+
+  if (!req.isXHubValid()) {
+    console.log("Invalid X-Hub Signature");
+    return res.sendStatus(401);
+  }
+
   received_updates.unshift(req.body);
+
+  try {
+
+    await axios.post(
+      MAKE_WEBHOOK,
+      req.body,
+      {
+        headers: {
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    console.log("Successfully sent to Make");
+
+  } catch (err) {
+
+    console.log("Error sending to Make");
+
+    if (err.response) {
+      console.log(err.response.data);
+    } else {
+      console.log(err.message);
+    }
+
+  }
+
   res.sendStatus(200);
+
 });
 
-app.post('/threads', function(req, res) {
-  console.log('Threads request body:');
-  console.log(req.body);
-  // Process the Threads updates here
+/**
+ * Threads
+ */
+
+app.post("/threads", function (req, res) {
+
+  console.log("Threads request body:");
+  console.log(JSON.stringify(req.body, null, 2));
+
   received_updates.unshift(req.body);
+
   res.sendStatus(200);
+
 });
 
-app.listen();
+app.listen(app.get("port"), function () {
+  console.log("Server started on port " + app.get("port"));
+});
