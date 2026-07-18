@@ -1,18 +1,19 @@
 {
   "name": "graph-api-webhooks-samples",
-  "version": "0.1.1",
-  "description": "Graph API Webhooks Sample",
-  "main": "index.js",
+  "version": "1.0.0",
+  "description": "Instagram Graph API Webhooks -> Make",
+  "main": "heroku/index.js",
   "scripts": {
     "start": "node heroku/index.js"
   },
   "dependencies": {
-    "body-parser": "~1.20.3",
-    "express": "~4.13.3",
+    "axios": "^1.11.0",
+    "body-parser": "^1.20.3",
+    "express": "^4.21.2",
     "express-x-hub": "^1.0.4"
   },
   "engines": {
-    "node": "0.12.7"
+    "node": "22.x"
   },
   "repository": {
     "type": "git",
@@ -22,8 +23,10 @@
     "node",
     "heroku",
     "express",
-    "graph api"
+    "graph-api",
+    "instagram",
+    "webhooks",
+    "make"
   ],
-  "license": "https://github.com/fbsamples/graph-api-webhooks-samples/blob/master/LICENSE",
-  "bugs": "https://github.com/fbsamples/graph-api-webhooks-samples/issues"
+  "license": "MIT"
 }
