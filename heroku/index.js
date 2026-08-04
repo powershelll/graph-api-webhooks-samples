@@ -487,8 +487,6 @@ app.get("/auth/instagram", function (req, res) {
       "instagram_business_manage_comments",
     ].join(","),
     state: state,
-    enable_fb_login: "0",
-    force_authentication: "1",
   });
 
   const authorizationUrl =
