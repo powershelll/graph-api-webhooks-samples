@@ -12,6 +12,10 @@ const app = express();
 
 app.set("port", process.env.PORT || 5000);
 
+/**
+ * Проверка подписи Meta Webhook.
+ * Middleware должен находиться перед bodyParser.json().
+ */
 app.use(
   xhub({
     algorithm: "sha1",
@@ -33,11 +37,10 @@ const INSTAGRAM_API_VERSION =
 
 let received_updates = [];
 
-app.get("/", function (req, res) {
-  res.redirect("/instagram-admin");
-});
-
-/**function escapeHtml(value) {
+/**
+ * Экранирование значений перед выводом в HTML.
+ */
+function escapeHtml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -47,9 +50,25 @@ app.get("/", function (req, res) {
 }
 
 /**
- * Instagram administration page
+ * Главная страница.
  */
+app.get("/", function (req, res) {
+  res.redirect("/instagram-admin");
+});
 
+/**
+ * Проверка работоспособности сервера.
+ */
+app.get("/health", function (req, res) {
+  res.status(200).json({
+    status: "ok",
+    service: "Enzhi Crew Automation",
+  });
+});
+
+/**
+ * Страница подключённого Instagram-аккаунта.
+ */
 app.get("/instagram-admin", async function (req, res) {
   res.set("Cache-Control", "no-store");
 
@@ -76,10 +95,14 @@ app.get("/instagram-admin", async function (req, res) {
       );
 
       account = {
-        username: response.data.username,
+        username:
+          response.data.username ||
+          "unknown",
+
         userId:
           response.data.user_id ||
-          response.data.id,
+          response.data.id ||
+          "unknown",
       };
     } catch (error) {
       console.log("Instagram profile request failed");
@@ -94,7 +117,10 @@ app.get("/instagram-admin", async function (req, res) {
           `Instagram API returned HTTP ${error.response.status}`;
       } else {
         console.log(error.message);
-        errorMessage = error.message;
+
+        errorMessage =
+          error.message ||
+          "Не удалось обратиться к Instagram API.";
       }
     }
   }
@@ -118,14 +144,21 @@ app.get("/instagram-admin", async function (req, res) {
 
         <div class="data-row">
           <span>Status</span>
-          <strong class="connected">Connected</strong>
+          <strong class="connected">
+            Connected
+          </strong>
         </div>
       </div>
     `
     : `
       <div class="error-card">
-        <strong>Instagram account is not connected</strong>
-        <p>${escapeHtml(errorMessage)}</p>
+        <strong>
+          Instagram account is not connected
+        </strong>
+
+        <p>
+          ${escapeHtml(errorMessage)}
+        </p>
       </div>
     `;
 
@@ -133,7 +166,7 @@ app.get("/instagram-admin", async function (req, res) {
     ? "Reconnect Instagram Account"
     : "Connect Instagram Account";
 
-  res.status(account ? 200 : 500).send(`
+  res.status(200).send(`
     <!DOCTYPE html>
     <html lang="en">
       <head>
@@ -269,7 +302,8 @@ app.get("/instagram-admin", async function (req, res) {
           <h1>Enzhi Crew Automation</h1>
 
           <p class="description">
-            Connect and manage an Instagram professional account.
+            Connect and manage an Instagram
+            professional account.
           </p>
 
           <a
@@ -282,8 +316,9 @@ app.get("/instagram-admin", async function (req, res) {
           ${accountBlock}
 
           <p class="notice">
-            Instagram profile information is used only
-            to identify the connected professional account.
+            Instagram profile information is used
+            only to identify the connected
+            professional account.
           </p>
         </main>
       </body>
@@ -292,119 +327,197 @@ app.get("/instagram-admin", async function (req, res) {
 });
 
 /**
- * Temporary route.
- * Full Instagram OAuth will be added next.
+ * Временный маршрут авторизации.
+ * Настоящий Instagram OAuth добавим следующим этапом.
  */
-
 app.get("/auth/instagram", function (req, res) {
-  res.status(501).send(`
-    <h2>Instagram authorization is not configured yet</h2>
-    <p>
-      The account page is working.
-      OAuth will be connected in the next step.
-    </p>
-    <p>
-      <a href="/instagram-admin">
-        Return to Enzhi Crew Automation
-      </a>
-    </p>
+  res.status(200).send(`
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1.0"
+        >
+
+        <title>Instagram authorization</title>
+      </head>
+
+      <body style="
+        font-family: Arial, sans-serif;
+        padding: 40px;
+      ">
+        <h2>
+          Instagram authorization is not configured yet
+        </h2>
+
+        <p>
+          The account information page is working.
+          Instagram OAuth will be connected next.
+        </p>
+
+        <p>
+          <a href="/instagram-admin">
+            Return to Enzhi Crew Automation
+          </a>
+        </p>
+      </body>
+    </html>
   `);
 });
- * Webhook verification
- */
-
-app.get(["/facebook", "/instagram", "/threads"], function (req, res) {
-  if (
-    req.query["hub.mode"] === "subscribe" &&
-    req.query["hub.verify_token"] === VERIFY_TOKEN
-  ) {
-    console.log("Webhook verified");
-    return res.status(200).send(req.query["hub.challenge"]);
-  }
-
-  res.sendStatus(403);
-});
 
 /**
- * Facebook
+ * Meta Webhook verification.
  */
+app.get(
+  ["/facebook", "/instagram", "/threads"],
+  function (req, res) {
+    if (
+      req.query["hub.mode"] === "subscribe" &&
+      req.query["hub.verify_token"] === VERIFY_TOKEN
+    ) {
+      console.log("Webhook verified");
 
+      return res
+        .status(200)
+        .send(req.query["hub.challenge"]);
+    }
+
+    return res.sendStatus(403);
+  }
+);
+
+/**
+ * Facebook Webhook.
+ */
 app.post("/facebook", function (req, res) {
   console.log("Facebook request body:");
-  console.log(JSON.stringify(req.body, null, 2));
+
+  console.log(
+    JSON.stringify(req.body, null, 2)
+  );
 
   if (!req.isXHubValid()) {
     console.log("Invalid X-Hub Signature");
+
     return res.sendStatus(401);
   }
 
   received_updates.unshift(req.body);
 
-  res.sendStatus(200);
+  if (received_updates.length > 100) {
+    received_updates = received_updates.slice(0, 100);
+  }
+
+  return res.sendStatus(200);
 });
 
 /**
- * Instagram
+ * Instagram Webhook.
  */
-
 app.post("/instagram", async function (req, res) {
-
   console.log("=======================================");
   console.log("Instagram Webhook received");
-  console.log(JSON.stringify(req.body, null, 2));
+
+  console.log(
+    JSON.stringify(req.body, null, 2)
+  );
 
   if (!req.isXHubValid()) {
     console.log("Invalid X-Hub Signature");
+
     return res.sendStatus(401);
   }
 
   received_updates.unshift(req.body);
 
+  if (received_updates.length > 100) {
+    received_updates = received_updates.slice(0, 100);
+  }
+
+  /*
+   * Сразу отвечаем Meta статусом 200,
+   * чтобы webhook не был отправлен повторно.
+   */
+  res.sendStatus(200);
+
   try {
+    if (!MAKE_WEBHOOK) {
+      throw new Error(
+        "MAKE_WEBHOOK_URL is not configured in Heroku"
+      );
+    }
 
     await axios.post(
       MAKE_WEBHOOK,
       req.body,
       {
         headers: {
-          "Content-Type": "application/json"
-        }
+          "Content-Type": "application/json",
+        },
+        timeout: 15000,
       }
     );
 
     console.log("Successfully sent to Make");
-
-  } catch (err) {
-
+  } catch (error) {
     console.log("Error sending to Make");
 
-    if (err.response) {
-      console.log(err.response.data);
+    if (error.response) {
+      console.log(
+        JSON.stringify(
+          error.response.data,
+          null,
+          2
+        )
+      );
     } else {
-      console.log(err.message);
+      console.log(error.message);
     }
-
   }
-
-  res.sendStatus(200);
-
 });
 
 /**
- * Threads
+ * Threads Webhook.
  */
-
 app.post("/threads", function (req, res) {
-
   console.log("Threads request body:");
-  console.log(JSON.stringify(req.body, null, 2));
+
+  console.log(
+    JSON.stringify(req.body, null, 2)
+  );
 
   received_updates.unshift(req.body);
 
-  res.sendStatus(200);
+  if (received_updates.length > 100) {
+    received_updates = received_updates.slice(0, 100);
+  }
 
+  return res.sendStatus(200);
 });
 
+/**
+ * Обработка неизвестных страниц.
+ */
+app.use(function (req, res) {
+  res.status(404).send(`
+    <h2>Page not found</h2>
+    <p>
+      <a href="/instagram-admin">
+        Open Enzhi Crew Automation
+      </a>
+    </p>
+  `);
+});
+
+/**
+ * Запуск сервера.
+ */
 app.listen(app.get("port"), function () {
-  console.log("Server started on port " + app.get("port"));
+  console.log(
+    "Server started on port " +
+    app.get("port")
+  );
 });
