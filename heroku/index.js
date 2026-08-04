@@ -502,6 +502,13 @@ app.get("/auth/instagram", function (req, res) {
 app.get(
   "/auth/instagram/callback",
   async function (req, res) {
+    console.log("Instagram OAuth callback received", {
+  hasCode: Boolean(req.query.code),
+  hasState: Boolean(req.query.state),
+  error: req.query.error || null,
+  errorDescription:
+    req.query.error_description || null,
+});
     const authorizationCode =
       req.query.code;
 
