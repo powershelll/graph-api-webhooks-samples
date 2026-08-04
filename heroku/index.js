@@ -7,6 +7,7 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const xhub = require("express-x-hub");
 const axios = require("axios");
+const crypto = require("crypto");
 
 const app = express();
 
@@ -29,8 +30,21 @@ const VERIFY_TOKEN = process.env.TOKEN || "token";
 
 const MAKE_WEBHOOK = process.env.MAKE_WEBHOOK_URL;
 
-const INSTAGRAM_ACCESS_TOKEN =
-  process.env.INSTAGRAM_ACCESS_TOKEN;
+let instagramAccessToken =
+  process.env.INSTAGRAM_ACCESS_TOKEN || null;
+
+const INSTAGRAM_APP_ID =
+  process.env.INSTAGRAM_APP_ID;
+
+const INSTAGRAM_APP_SECRET =
+  process.env.INSTAGRAM_APP_SECRET;
+
+const INSTAGRAM_REDIRECT_URI =
+  process.env.INSTAGRAM_REDIRECT_URI;
+
+const OAUTH_STATE_SECRET =
+  process.env.OAUTH_STATE_SECRET ||
+  process.env.APP_SECRET;
 
 const INSTAGRAM_API_VERSION =
   process.env.INSTAGRAM_API_VERSION || "v26.0";
@@ -47,6 +61,91 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+function toBase64Url(value) {
+  return value
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function createOAuthState() {
+  const timestamp = Date.now().toString();
+
+  const randomValue = toBase64Url(
+    crypto.randomBytes(24)
+  );
+
+  const payload = `${timestamp}.${randomValue}`;
+
+  const signature = toBase64Url(
+    crypto
+      .createHmac("sha256", OAUTH_STATE_SECRET)
+      .update(payload)
+      .digest()
+  );
+
+  return `${payload}.${signature}`;
+}
+
+function validateOAuthState(state) {
+  if (!state || !OAUTH_STATE_SECRET) {
+    return false;
+  }
+
+  const parts = String(state).split(".");
+
+  if (parts.length !== 3) {
+    return false;
+  }
+
+  const timestamp = Number(parts[0]);
+
+  if (!Number.isFinite(timestamp)) {
+    return false;
+  }
+
+  const stateAge = Date.now() - timestamp;
+
+  if (
+    stateAge < 0 ||
+    stateAge > 10 * 60 * 1000
+  ) {
+    return false;
+  }
+
+  const payload = `${parts[0]}.${parts[1]}`;
+
+  const expectedSignature = toBase64Url(
+    crypto
+      .createHmac("sha256", OAUTH_STATE_SECRET)
+      .update(payload)
+      .digest()
+  );
+
+  const receivedBuffer = Buffer.from(
+    parts[2],
+    "utf8"
+  );
+
+  const expectedBuffer = Buffer.from(
+    expectedSignature,
+    "utf8"
+  );
+
+  if (
+    receivedBuffer.length !==
+    expectedBuffer.length
+  ) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(
+    receivedBuffer,
+    expectedBuffer
+  );
 }
 
 /**
@@ -75,7 +174,7 @@ app.get("/instagram-admin", async function (req, res) {
   let account = null;
   let errorMessage = null;
 
-  if (!INSTAGRAM_ACCESS_TOKEN) {
+  if (!instagramAccessToken) {
     errorMessage =
       "Переменная INSTAGRAM_ACCESS_TOKEN не задана в Heroku.";
   } else {
@@ -87,7 +186,7 @@ app.get("/instagram-admin", async function (req, res) {
             fields: "user_id,username",
           },
           headers: {
-            Authorization: `Bearer ${INSTAGRAM_ACCESS_TOKEN}`,
+           Authorization: `Bearer ${instagramAccessToken}`,
             Accept: "application/json",
           },
           timeout: 10000,
@@ -330,32 +429,97 @@ app.get("/instagram-admin", async function (req, res) {
  * Временный маршрут авторизации.
  * Настоящий Instagram OAuth добавим следующим этапом.
  */
+/**
+ * Начало Instagram OAuth.
+ */
 app.get("/auth/instagram", function (req, res) {
-  res.status(200).send(`
-    <!DOCTYPE html>
-    <html lang="en">
-      <head>
-        <meta charset="UTF-8">
+  const missingVariables = [];
 
-        <meta
-          name="viewport"
-          content="width=device-width, initial-scale=1.0"
-        >
+  if (!INSTAGRAM_APP_ID) {
+    missingVariables.push("INSTAGRAM_APP_ID");
+  }
 
-        <title>Instagram authorization</title>
-      </head>
+  if (!INSTAGRAM_APP_SECRET) {
+    missingVariables.push(
+      "INSTAGRAM_APP_SECRET"
+    );
+  }
 
-      <body style="
-        font-family: Arial, sans-serif;
-        padding: 40px;
-      ">
-        <h2>
-          Instagram authorization is not configured yet
-        </h2>
+  if (!INSTAGRAM_REDIRECT_URI) {
+    missingVariables.push(
+      "INSTAGRAM_REDIRECT_URI"
+    );
+  }
+
+  if (!OAUTH_STATE_SECRET) {
+    missingVariables.push(
+      "OAUTH_STATE_SECRET"
+    );
+  }
+
+  if (missingVariables.length > 0) {
+    return res.status(500).send(`
+      <h2>Instagram OAuth is not configured</h2>
+
+      <p>Missing Heroku Config Vars:</p>
+
+      <pre>${escapeHtml(
+        missingVariables.join("\n")
+      )}</pre>
+
+      <p>
+        <a href="/instagram-admin">
+          Return to Enzhi Crew Automation
+        </a>
+      </p>
+    `);
+  }
+
+  const state = createOAuthState();
+
+  const parameters = new URLSearchParams({
+    client_id: INSTAGRAM_APP_ID,
+    redirect_uri: INSTAGRAM_REDIRECT_URI,
+    response_type: "code",
+    scope: [
+      "instagram_business_basic",
+      "instagram_business_manage_messages",
+      "instagram_business_manage_comments",
+    ].join(","),
+    state: state,
+    enable_fb_login: "0",
+    force_authentication: "1",
+  });
+
+  const authorizationUrl =
+    "https://www.instagram.com/oauth/authorize?" +
+    parameters.toString();
+
+  return res.redirect(authorizationUrl);
+});
+
+/**
+ * Возврат пользователя из Instagram.
+ */
+app.get(
+  "/auth/instagram/callback",
+  async function (req, res) {
+    const authorizationCode =
+      req.query.code;
+
+    const returnedState =
+      req.query.state;
+
+    if (req.query.error) {
+      return res.status(400).send(`
+        <h2>Instagram authorization cancelled</h2>
 
         <p>
-          The account information page is working.
-          Instagram OAuth will be connected next.
+          ${escapeHtml(
+            req.query.error_description ||
+            req.query.error_reason ||
+            req.query.error
+          )}
         </p>
 
         <p>
@@ -363,10 +527,190 @@ app.get("/auth/instagram", function (req, res) {
             Return to Enzhi Crew Automation
           </a>
         </p>
-      </body>
-    </html>
-  `);
-});
+      `);
+    }
+
+    if (!authorizationCode) {
+      return res.status(400).send(`
+        <h2>Authorization code is missing</h2>
+
+        <p>
+          Instagram did not return an authorization code.
+        </p>
+
+        <p>
+          <a href="/instagram-admin">
+            Return to Enzhi Crew Automation
+          </a>
+        </p>
+      `);
+    }
+
+    if (!validateOAuthState(returnedState)) {
+      return res.status(403).send(`
+        <h2>Invalid OAuth state</h2>
+
+        <p>
+          Start the Instagram connection again.
+        </p>
+
+        <p>
+          <a href="/instagram-admin">
+            Return to Enzhi Crew Automation
+          </a>
+        </p>
+      `);
+    }
+
+    try {
+      const cleanCode = String(
+        authorizationCode
+      ).replace(/#_$/, "");
+
+      const tokenForm =
+        new URLSearchParams();
+
+      tokenForm.append(
+        "client_id",
+        INSTAGRAM_APP_ID
+      );
+
+      tokenForm.append(
+        "client_secret",
+        INSTAGRAM_APP_SECRET
+      );
+
+      tokenForm.append(
+        "grant_type",
+        "authorization_code"
+      );
+
+      tokenForm.append(
+        "redirect_uri",
+        INSTAGRAM_REDIRECT_URI
+      );
+
+      tokenForm.append(
+        "code",
+        cleanCode
+      );
+
+      // Получаем краткосрочный токен.
+      const shortTokenResponse =
+        await axios.post(
+          "https://api.instagram.com/oauth/access_token",
+          tokenForm.toString(),
+          {
+            headers: {
+              "Content-Type":
+                "application/x-www-form-urlencoded",
+            },
+            timeout: 15000,
+          }
+        );
+
+      const shortToken =
+        shortTokenResponse.data.access_token;
+
+      if (!shortToken) {
+        throw new Error(
+          "Instagram did not return an access token"
+        );
+      }
+
+      let finalToken = shortToken;
+
+      // Обмениваем его на долгосрочный токен.
+      try {
+        const longTokenResponse =
+          await axios.get(
+            "https://graph.instagram.com/access_token",
+            {
+              params: {
+                grant_type:
+                  "ig_exchange_token",
+
+                client_secret:
+                  INSTAGRAM_APP_SECRET,
+
+                access_token:
+                  shortToken,
+              },
+              timeout: 15000,
+            }
+          );
+
+        if (
+          longTokenResponse.data.access_token
+        ) {
+          finalToken =
+            longTokenResponse.data.access_token;
+        }
+      } catch (longTokenError) {
+        console.log(
+          "Long-lived token exchange failed"
+        );
+
+        if (longTokenError.response) {
+          console.log(
+            JSON.stringify(
+              longTokenError.response.data,
+              null,
+              2
+            )
+          );
+        } else {
+          console.log(
+            longTokenError.message
+          );
+        }
+      }
+
+      // Сохраняем токен в памяти приложения.
+      // В логи и HTML токен не выводим.
+      instagramAccessToken = finalToken;
+
+      return res.redirect(
+        "/instagram-admin?connected=1"
+      );
+    } catch (error) {
+      console.log(
+        "Instagram OAuth callback failed"
+      );
+
+      let errorMessage = error.message;
+
+      if (error.response) {
+        console.log(
+          JSON.stringify(
+            error.response.data,
+            null,
+            2
+          )
+        );
+
+        errorMessage =
+          error.response.data?.error_message ||
+          error.response.data?.error?.message ||
+          `Instagram returned HTTP ${error.response.status}`;
+      }
+
+      return res.status(500).send(`
+        <h2>Instagram connection failed</h2>
+
+        <p>
+          ${escapeHtml(errorMessage)}
+        </p>
+
+        <p>
+          <a href="/instagram-admin">
+            Try again
+          </a>
+        </p>
+      `);
+    }
+  }
+);
 
 /**
  * Meta Webhook verification.
