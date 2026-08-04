@@ -40,8 +40,14 @@ app.use(
 
 app.use(bodyParser.json());
 
-const VERIFY_TOKEN = process.env.TOKEN || "token";
+const VERIFY_TOKEN =
+  process.env.WEBHOOK_VERIFY_TOKEN;
 
+if (!VERIFY_TOKEN) {
+  console.warn(
+    "WEBHOOK_VERIFY_TOKEN is not configured"
+  );
+}
 const MAKE_WEBHOOK = process.env.MAKE_WEBHOOK_URL;
 
 let instagramAccessToken =
