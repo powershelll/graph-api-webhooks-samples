@@ -10,7 +10,21 @@ const axios = require("axios");
 const crypto = require("crypto");
 
 const app = express();
+app.set("trust proxy", 1);
 
+app.use(function (req, res, next) {
+  const forwardedProtocol =
+    req.headers["x-forwarded-proto"];
+
+  if (forwardedProtocol !== "https") {
+    return res.redirect(
+      301,
+      `https://${req.headers.host}${req.originalUrl}`
+    );
+  }
+
+  next();
+});
 app.set("port", process.env.PORT || 5000);
 
 /**
