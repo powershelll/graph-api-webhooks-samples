@@ -1053,29 +1053,35 @@ app.get(
 
   async function (req, res) {
 
-    console.log(
-      "Instagram OAuth callback received",
-      {
-        hasCode:
-          Boolean(
-            req.query.code
-          ),
+   console.log(
+  "Instagram OAuth callback received",
+  {
+    queryKeys: Object.keys(req.query),
 
-        hasState:
-          Boolean(
-            req.query.state
-          ),
+    hasCode:
+      typeof req.query.code === "string" &&
+      req.query.code.length > 0,
 
-        error:
-          req.query.error ||
-          null,
+    hasState:
+      typeof req.query.state === "string" &&
+      req.query.state.length > 0,
 
-        errorDescription:
-          req.query
-            .error_description ||
-          null,
-      }
-    );
+    error:
+      req.query.error || null,
+
+    errorReason:
+      req.query.error_reason || null,
+
+    errorDescription:
+      req.query.error_description || null,
+
+    userAgent:
+      req.headers["user-agent"] || null,
+
+    referer:
+      req.headers["referer"] || null,
+  }
+);
 
 
     const authorizationCode =
