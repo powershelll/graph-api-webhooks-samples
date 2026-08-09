@@ -1856,7 +1856,79 @@ app.post(
     );
   }
 );
+/**
+ * Instagram deauthorization callback
+ */
+app.post(
+  "/instagram/deauthorize",
+  function (req, res) {
 
+    console.log(
+      "Instagram deauthorization received"
+    );
+
+    console.log(
+      JSON.stringify(req.body, null, 2)
+    );
+
+    return res.sendStatus(200);
+  }
+);
+
+
+/**
+ * Instagram data deletion callback
+ */
+app.post(
+  "/instagram/data-deletion",
+  function (req, res) {
+
+    console.log(
+      "Instagram data deletion request received"
+    );
+
+    const confirmationCode =
+      crypto
+        .randomBytes(12)
+        .toString("hex");
+
+    return res.status(200).json({
+      url:
+        `https://${req.get("host")}/instagram/data-deletion/status?code=${confirmationCode}`,
+
+      confirmation_code:
+        confirmationCode,
+    });
+  }
+);
+
+
+/**
+ * Instagram data deletion status
+ */
+app.get(
+  "/instagram/data-deletion/status",
+  function (req, res) {
+
+    return res.status(200).send(`
+      <h2>
+        Data deletion request
+      </h2>
+
+      <p>
+        Your Instagram data deletion
+        request has been received.
+      </p>
+
+      <p>
+        Confirmation code:
+        ${escapeHtml(
+          req.query.code || ""
+        )}
+      </p>
+    `);
+  }
+);
 
 /**
  * ======================================================
