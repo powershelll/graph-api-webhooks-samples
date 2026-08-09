@@ -1024,6 +1024,9 @@ ${escapeHtml(
           "instagram_business_manage_comments",
 
         ].join(","),
+   
+        force_reauth:
+      "true",
 
         state:
           state,
