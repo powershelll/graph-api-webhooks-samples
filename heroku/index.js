@@ -91,8 +91,88 @@ function escapeHtml(value) {
 }
 function getRecentInstagramMessages() {
   const messages = [];
+  const seen = new Set();
 
-  for (const update of received_updates) {
+  function addMessage(data) {
+    if (!data) {
+      return;
+    }
+
+    const text =
+      typeof data.text === "string"
+        ? data.text.trim()
+        : "";
+
+    if (!text) {
+      return;
+    }
+
+    const messageId =
+      String(
+        data.messageId || ""
+      );
+
+    /*
+     * Убираем дубли.
+     */
+    if (
+      messageId &&
+      seen.has(messageId)
+    ) {
+      return;
+    }
+
+    if (messageId) {
+      seen.add(messageId);
+    }
+
+
+    let timestamp =
+      Number(
+        data.timestamp || 0
+      );
+
+    /*
+     * Некоторые payload содержат
+     * timestamp в секундах,
+     * другие — в миллисекундах.
+     */
+    if (
+      timestamp > 0 &&
+      timestamp < 100000000000
+    ) {
+      timestamp =
+        timestamp * 1000;
+    }
+
+
+    messages.push({
+      senderId:
+        String(
+          data.senderId || ""
+        ),
+
+      recipientId:
+        String(
+          data.recipientId || ""
+        ),
+
+      text:
+        text,
+
+      timestamp:
+        timestamp,
+
+      messageId:
+        messageId,
+    });
+  }
+
+
+  for (
+    const update of received_updates
+  ) {
+
     if (
       !update ||
       update.object !== "instagram"
@@ -100,69 +180,141 @@ function getRecentInstagramMessages() {
       continue;
     }
 
+
     const entries =
       Array.isArray(update.entry)
         ? update.entry
         : [];
 
+
     for (const entry of entries) {
-      const events =
+
+      /*
+       * ВАРИАНТ №1
+       *
+       * Реальные messaging events.
+       *
+       * entry.messaging[]
+       */
+      const messagingEvents =
         Array.isArray(entry.messaging)
           ? entry.messaging
           : [];
 
-      for (const event of events) {
-        /*
-         * Нам нужны только реальные
-         * входящие сообщения.
-         */
+
+      for (
+        const event
+        of messagingEvents
+      ) {
+
         if (!event.message) {
           continue;
         }
 
-        if (event.message.is_echo) {
+
+        /*
+         * Наши собственные исходящие
+         * сообщения не показываем
+         * как входящие.
+         */
+        if (
+          event.message.is_echo
+        ) {
           continue;
         }
 
-        const text =
-          typeof event.message.text === "string"
-            ? event.message.text
-            : "";
 
-        if (!text) {
-          continue;
-        }
-
-        messages.push({
+        addMessage({
           senderId:
-            String(
-              event.sender?.id || ""
-            ),
+            event.sender?.id,
 
           recipientId:
-            String(
-              event.recipient?.id || ""
-            ),
+            event.recipient?.id,
 
-          text: text,
+          text:
+            event.message?.text,
 
           timestamp:
-            Number(
-              event.timestamp || 0
-            ),
+            event.timestamp,
 
           messageId:
-            String(
-              event.message?.mid || ""
-            ),
+            event.message?.mid,
+        });
+      }
+
+
+      /*
+       * ВАРИАНТ №2
+       *
+       * Формат тестового webhook,
+       * который сейчас прислал Meta.
+       *
+       * entry.changes[].value
+       */
+      const changes =
+        Array.isArray(entry.changes)
+          ? entry.changes
+          : [];
+
+
+      for (
+        const change
+        of changes
+      ) {
+
+        if (
+          change.field !==
+          "messages"
+        ) {
+          continue;
+        }
+
+
+        const value =
+          change.value || {};
+
+
+        if (!value.message) {
+          continue;
+        }
+
+
+        addMessage({
+          senderId:
+            value.sender?.id,
+
+          recipientId:
+            value.recipient?.id,
+
+          text:
+            value.message?.text,
+
+          timestamp:
+            value.timestamp,
+
+          messageId:
+            value.message?.mid,
         });
       }
     }
   }
 
-  return messages.slice(0, 30);
-}
 
+  messages.sort(
+    function (a, b) {
+      return (
+        b.timestamp -
+        a.timestamp
+      );
+    }
+  );
+
+
+  return messages.slice(
+    0,
+    30
+  );
+}
 function toBase64Url(value) {
   return value
     .toString("base64")
