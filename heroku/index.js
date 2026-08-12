@@ -10,7 +10,9 @@ const crypto = require("crypto");
 
 const app = express();
 
-const PORT = process.env.PORT || 5000;
+const PORT =
+  process.env.PORT || 5000;
+
 
 /**
  * ======================================================
@@ -27,19 +29,24 @@ const VERIFY_TOKEN =
   null;
 
 const MAKE_WEBHOOK =
-  process.env.MAKE_WEBHOOK_URL || null;
+  process.env.MAKE_WEBHOOK_URL ||
+  null;
 
 let instagramAccessToken =
-  process.env.INSTAGRAM_ACCESS_TOKEN || null;
+  process.env.INSTAGRAM_ACCESS_TOKEN ||
+  null;
 
 const INSTAGRAM_APP_ID =
-  process.env.INSTAGRAM_APP_ID || null;
+  process.env.INSTAGRAM_APP_ID ||
+  null;
 
 const INSTAGRAM_APP_SECRET =
-  process.env.INSTAGRAM_APP_SECRET || null;
+  process.env.INSTAGRAM_APP_SECRET ||
+  null;
 
 const INSTAGRAM_REDIRECT_URI =
-  process.env.INSTAGRAM_REDIRECT_URI || null;
+  process.env.INSTAGRAM_REDIRECT_URI ||
+  null;
 
 const OAUTH_STATE_SECRET =
   process.env.OAUTH_STATE_SECRET ||
@@ -47,9 +54,17 @@ const OAUTH_STATE_SECRET =
   null;
 
 const INSTAGRAM_API_VERSION =
-  process.env.INSTAGRAM_API_VERSION || "v26.0";
+  process.env.INSTAGRAM_API_VERSION ||
+  "v26.0";
 
+
+/**
+ * ВАЖНО:
+ * используем ОДИН массив для входящих webhook.
+ */
 let receivedUpdates = [];
+
+let sent_messages = [];
 
 
 /**
@@ -58,23 +73,25 @@ let receivedUpdates = [];
  * ======================================================
  *
  * Сохраняем оригинальное тело запроса.
- * Оно потребуется для проверки подписи Meta.
+ * Оно требуется для проверки подписи Meta.
  */
 
 app.use(
   bodyParser.json({
     verify: function (req, res, buf) {
-      req.rawBody = Buffer.from(buf);
+      req.rawBody =
+        Buffer.from(buf);
     },
   })
 );
+
 app.use(
   bodyParser.urlencoded({
     extended: false,
   })
 );
-let received_updates = [];
-let sent_messages = [];
+
+
 /**
  * ======================================================
  * HELPERS
@@ -89,30 +106,48 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
+
+
+/**
+ * Извлекаем последние Instagram Direct сообщения
+ * из сохранённых webhook.
+ *
+ * Поддерживаются два формата:
+ *
+ * 1. entry.messaging[]
+ * 2. entry.changes[].value
+ */
 function getRecentInstagramMessages() {
+
   const messages = [];
   const seen = new Set();
 
+
   function addMessage(data) {
+
     if (!data) {
       return;
     }
+
 
     const text =
       typeof data.text === "string"
         ? data.text.trim()
         : "";
 
+
     if (!text) {
       return;
     }
+
 
     const messageId =
       String(
         data.messageId || ""
       );
 
-    /*
+
+    /**
      * Убираем дубли.
      */
     if (
@@ -121,6 +156,7 @@ function getRecentInstagramMessages() {
     ) {
       return;
     }
+
 
     if (messageId) {
       seen.add(messageId);
@@ -132,10 +168,11 @@ function getRecentInstagramMessages() {
         data.timestamp || 0
       );
 
-    /*
-     * Некоторые payload содержат
-     * timestamp в секундах,
-     * другие — в миллисекундах.
+
+    /**
+     * Meta может присылать timestamp
+     * как в секундах,
+     * так и в миллисекундах.
      */
     if (
       timestamp > 0 &&
@@ -147,6 +184,7 @@ function getRecentInstagramMessages() {
 
 
     messages.push({
+
       senderId:
         String(
           data.senderId || ""
@@ -169,8 +207,15 @@ function getRecentInstagramMessages() {
   }
 
 
+  /**
+   * ВАЖНО:
+   * читаем ИЗ ТОГО ЖЕ массива,
+   * куда rememberUpdate()
+   * сохраняет webhook.
+   */
   for (
-    const update of received_updates
+    const update
+    of receivedUpdates
   ) {
 
     if (
@@ -187,15 +232,22 @@ function getRecentInstagramMessages() {
         : [];
 
 
-    for (const entry of entries) {
+    for (
+      const entry
+      of entries
+    ) {
 
-      /*
-       * ВАРИАНТ №1
+
+      /**
+       * ==========================================
+       * FORMAT 1
+       * ==========================================
        *
-       * Реальные messaging events.
+       * Реальные Instagram messaging events:
        *
        * entry.messaging[]
        */
+
       const messagingEvents =
         Array.isArray(entry.messaging)
           ? entry.messaging
@@ -212,9 +264,8 @@ function getRecentInstagramMessages() {
         }
 
 
-        /*
-         * Наши собственные исходящие
-         * сообщения не показываем
+        /**
+         * Не показываем исходящие сообщения
          * как входящие.
          */
         if (
@@ -225,6 +276,7 @@ function getRecentInstagramMessages() {
 
 
         addMessage({
+
           senderId:
             event.sender?.id,
 
@@ -243,14 +295,16 @@ function getRecentInstagramMessages() {
       }
 
 
-      /*
-       * ВАРИАНТ №2
+      /**
+       * ==========================================
+       * FORMAT 2
+       * ==========================================
        *
-       * Формат тестового webhook,
-       * который сейчас прислал Meta.
+       * Формат тестового webhook Meta:
        *
        * entry.changes[].value
        */
+
       const changes =
         Array.isArray(entry.changes)
           ? entry.changes
@@ -280,6 +334,7 @@ function getRecentInstagramMessages() {
 
 
         addMessage({
+
           senderId:
             value.sender?.id,
 
@@ -315,7 +370,13 @@ function getRecentInstagramMessages() {
     30
   );
 }
+
+
+/**
+ * Преобразование Buffer в Base64 URL.
+ */
 function toBase64Url(value) {
+
   return value
     .toString("base64")
     .replace(/\+/g, "-")
@@ -327,24 +388,29 @@ function toBase64Url(value) {
 /**
  * Создание state для Instagram OAuth.
  */
-
 function createOAuthState() {
+
   if (!OAUTH_STATE_SECRET) {
+
     throw new Error(
       "OAUTH_STATE_SECRET is not configured"
     );
   }
 
+
   const timestamp =
     Date.now().toString();
+
 
   const randomValue =
     toBase64Url(
       crypto.randomBytes(24)
     );
 
+
   const payload =
     `${timestamp}.${randomValue}`;
+
 
   const signature =
     toBase64Url(
@@ -357,6 +423,7 @@ function createOAuthState() {
         .digest()
     );
 
+
   return `${payload}.${signature}`;
 }
 
@@ -364,41 +431,58 @@ function createOAuthState() {
 /**
  * Проверка state после возврата из Instagram.
  */
-
 function validateOAuthState(state) {
-  if (!state || !OAUTH_STATE_SECRET) {
+
+  if (
+    !state ||
+    !OAUTH_STATE_SECRET
+  ) {
     return false;
   }
+
 
   const parts =
     String(state).split(".");
 
-  if (parts.length !== 3) {
+
+  if (
+    parts.length !== 3
+  ) {
     return false;
   }
+
 
   const timestamp =
     Number(parts[0]);
 
-  if (!Number.isFinite(timestamp)) {
+
+  if (
+    !Number.isFinite(timestamp)
+  ) {
     return false;
   }
 
+
   const stateAge =
-    Date.now() - timestamp;
+    Date.now() -
+    timestamp;
+
 
   /**
    * State действителен 10 минут.
    */
   if (
     stateAge < 0 ||
-    stateAge > 10 * 60 * 1000
+    stateAge >
+      10 * 60 * 1000
   ) {
     return false;
   }
 
+
   const payload =
     `${parts[0]}.${parts[1]}`;
+
 
   const expectedSignature =
     toBase64Url(
@@ -411,11 +495,13 @@ function validateOAuthState(state) {
         .digest()
     );
 
+
   const receivedBuffer =
     Buffer.from(
       parts[2],
       "utf8"
     );
+
 
   const expectedBuffer =
     Buffer.from(
@@ -423,12 +509,14 @@ function validateOAuthState(state) {
       "utf8"
     );
 
+
   if (
     receivedBuffer.length !==
     expectedBuffer.length
   ) {
     return false;
   }
+
 
   return crypto.timingSafeEqual(
     receivedBuffer,
@@ -441,17 +529,12 @@ function validateOAuthState(state) {
  * ======================================================
  * META SIGNATURE
  * ======================================================
- *
- * Проверяет подпись входящего webhook.
- *
- * Поддерживаем:
- *
- * X-Hub-Signature-256
- * X-Hub-Signature
  */
 
 function verifyMetaSignature(req) {
+
   if (!APP_SECRET) {
+
     console.error(
       "APP_SECRET is not configured"
     );
@@ -459,7 +542,9 @@ function verifyMetaSignature(req) {
     return false;
   }
 
+
   if (!req.rawBody) {
+
     console.error(
       "Raw webhook body is missing"
     );
@@ -467,37 +552,45 @@ function verifyMetaSignature(req) {
     return false;
   }
 
+
   const signature256 =
     req.headers[
       "x-hub-signature-256"
     ];
+
 
   const signature1 =
     req.headers[
       "x-hub-signature"
     ];
 
+
   let receivedSignature;
   let algorithm;
   let prefix;
+
 
   if (signature256) {
 
     receivedSignature =
       String(signature256);
 
-    algorithm = "sha256";
+    algorithm =
+      "sha256";
 
-    prefix = "sha256=";
+    prefix =
+      "sha256=";
 
   } else if (signature1) {
 
     receivedSignature =
       String(signature1);
 
-    algorithm = "sha1";
+    algorithm =
+      "sha1";
 
-    prefix = "sha1=";
+    prefix =
+      "sha1=";
 
   } else {
 
@@ -526,6 +619,7 @@ function verifyMetaSignature(req) {
       "utf8"
     );
 
+
   const expectedBuffer =
     Buffer.from(
       expectedSignature,
@@ -551,17 +645,32 @@ function verifyMetaSignature(req) {
 /**
  * Запоминаем последние события.
  */
-
 function rememberUpdate(body) {
-  receivedUpdates.unshift(body);
 
-  if (receivedUpdates.length > 100) {
+  receivedUpdates.unshift(
+    body
+  );
+
+
+  if (
+    receivedUpdates.length > 100
+  ) {
+
     receivedUpdates =
       receivedUpdates.slice(
         0,
         100
       );
   }
+
+
+  console.log(
+    "Webhook stored in memory",
+    {
+      totalUpdates:
+        receivedUpdates.length,
+    }
+  );
 }
 
 
@@ -571,11 +680,15 @@ function rememberUpdate(body) {
  * ======================================================
  */
 
-app.get("/", function (req, res) {
-  return res.redirect(
-    "/instagram-admin"
-  );
-});
+app.get(
+  "/",
+  function (req, res) {
+
+    return res.redirect(
+      "/instagram-admin"
+    );
+  }
+);
 
 
 /**
@@ -591,7 +704,9 @@ app.get(
     return res
       .status(200)
       .json({
-        status: "ok",
+        status:
+          "ok",
+
         service:
           "Enzhi Crew Automation",
       });
@@ -614,8 +729,8 @@ app.get(
       "no-store"
     );
 
-    let account = null;
 
+    let account = null;
     let errorMessage = null;
 
 
@@ -630,7 +745,9 @@ app.get(
 
         const response =
           await axios.get(
+
             `https://graph.instagram.com/${INSTAGRAM_API_VERSION}/me`,
+
             {
               params: {
                 fields:
@@ -645,7 +762,8 @@ app.get(
                   "application/json",
               },
 
-              timeout: 10000,
+              timeout:
+                10000,
             }
           );
 
@@ -694,6 +812,7 @@ app.get(
             error.message
           );
 
+
           errorMessage =
             error.message ||
             "Не удалось обратиться к Instagram API.";
@@ -722,9 +841,11 @@ app.get(
 
 
             <div class="username">
+
               @${escapeHtml(
                 account.username
               )}
+
             </div>
 
 
@@ -796,10 +917,7 @@ app.get(
 
           <meta
             name="viewport"
-            content="
-              width=device-width,
-              initial-scale=1.0
-            "
+            content="width=device-width, initial-scale=1.0"
           >
 
           <title>
@@ -810,34 +928,18 @@ app.get(
           <style>
 
             * {
-              box-sizing:
-                border-box;
+              box-sizing: border-box;
             }
-
 
             body {
               margin: 0;
-
-              min-height:
-                100vh;
-
-              display:
-                flex;
-
-              align-items:
-                center;
-
-              justify-content:
-                center;
-
-              padding:
-                24px;
-
-              background:
-                #f5f6f8;
-
-              color:
-                #182230;
+              min-height: 100vh;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              padding: 24px;
+              background: #f5f6f8;
+              color: #182230;
 
               font-family:
                 Arial,
@@ -845,218 +947,97 @@ app.get(
                 sans-serif;
             }
 
-
             .container {
-
-              width:
-                100%;
-
-              max-width:
-                620px;
-
-              padding:
-                40px;
-
-              background:
-                #ffffff;
-
-              border-radius:
-                18px;
+              width: 100%;
+              max-width: 620px;
+              padding: 40px;
+              background: #ffffff;
+              border-radius: 18px;
 
               box-shadow:
                 0 16px 45px
-                rgba(
-                  0,
-                  0,
-                  0,
-                  0.09
-                );
+                rgba(0,0,0,0.09);
             }
-
 
             h1 {
-
-              margin:
-                0 0 10px;
-
-              font-size:
-                31px;
+              margin: 0 0 10px;
+              font-size: 31px;
             }
-
 
             .description {
-
-              margin:
-                0 0 26px;
-
-              color:
-                #667085;
-
-              line-height:
-                1.55;
+              margin: 0 0 26px;
+              color: #667085;
+              line-height: 1.55;
             }
-
 
             .connect-button {
-
-              display:
-                inline-block;
-
-              margin-bottom:
-                28px;
-
-              padding:
-                14px 22px;
-
-              border-radius:
-                10px;
-
-              background:
-                #0866ff;
-
-              color:
-                #ffffff;
-
-              font-weight:
-                700;
-
-              text-decoration:
-                none;
+              display: inline-block;
+              margin-bottom: 28px;
+              padding: 14px 22px;
+              border-radius: 10px;
+              background: #0866ff;
+              color: #ffffff;
+              font-weight: 700;
+              text-decoration: none;
             }
-
 
             .connect-button:hover {
-
-              background:
-                #0759dc;
+              background: #0759dc;
             }
-
 
             .account-card,
             .error-card {
-
-              padding:
-                24px;
-
-              border:
-                1px solid #dfe3e8;
-
-              border-radius:
-                14px;
+              padding: 24px;
+              border: 1px solid #dfe3e8;
+              border-radius: 14px;
             }
-
 
             .connection-heading {
-
-              display:
-                flex;
-
-              align-items:
-                center;
-
-              gap:
-                10px;
-
-              margin-bottom:
-                18px;
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              margin-bottom: 18px;
             }
-
 
             .status-dot {
-
-              width:
-                11px;
-
-              height:
-                11px;
-
-              border-radius:
-                50%;
-
-              background:
-                #12b76a;
+              width: 11px;
+              height: 11px;
+              border-radius: 50%;
+              background: #12b76a;
             }
-
 
             .username {
-
-              margin-bottom:
-                22px;
-
-              font-size:
-                26px;
-
-              font-weight:
-                700;
+              margin-bottom: 22px;
+              font-size: 26px;
+              font-weight: 700;
             }
-
 
             .data-row {
-
-              display:
-                flex;
-
-              justify-content:
-                space-between;
-
-              gap:
-                20px;
-
-              padding:
-                13px 0;
-
-              border-top:
-                1px solid #eeeeee;
+              display: flex;
+              justify-content: space-between;
+              gap: 20px;
+              padding: 13px 0;
+              border-top: 1px solid #eeeeee;
             }
-
 
             .data-row span {
-
-              color:
-                #667085;
+              color: #667085;
             }
-
 
             .connected {
-
-              color:
-                #079455;
+              color: #079455;
             }
-
 
             .error-card {
-
-              background:
-                #fff5f5;
-
-              border-color:
-                #f4b4b4;
+              background: #fff5f5;
+              border-color: #f4b4b4;
             }
-
-
-            .error-card p {
-
-              margin-bottom:
-                0;
-
-              overflow-wrap:
-                anywhere;
-            }
-
 
             .notice {
-
-              margin-top:
-                20px;
-
-              color:
-                #667085;
-
-              font-size:
-                13px;
-
-              line-height:
-                1.5;
+              margin-top: 20px;
+              color: #667085;
+              font-size: 13px;
+              line-height: 1.5;
             }
 
           </style>
@@ -1074,11 +1055,8 @@ app.get(
 
 
             <p class="description">
-
               Connect and manage an
-              Instagram professional
-              account.
-
+              Instagram professional account.
             </p>
 
 
@@ -1086,9 +1064,7 @@ app.get(
               class="connect-button"
               href="/auth/instagram"
             >
-
               ${buttonText}
-
             </a>
 
 
@@ -1096,12 +1072,9 @@ app.get(
 
 
             <p class="notice">
-
-              Instagram profile
-              information is used only
-              to identify the connected
-              professional account.
-
+              Instagram profile information
+              is used only to identify the
+              connected professional account.
             </p>
 
           </main>
@@ -1128,7 +1101,6 @@ app.get(
 
 
     if (!INSTAGRAM_APP_ID) {
-
       missingVariables.push(
         "INSTAGRAM_APP_ID"
       );
@@ -1136,7 +1108,6 @@ app.get(
 
 
     if (!INSTAGRAM_APP_SECRET) {
-
       missingVariables.push(
         "INSTAGRAM_APP_SECRET"
       );
@@ -1144,7 +1115,6 @@ app.get(
 
 
     if (!INSTAGRAM_REDIRECT_URI) {
-
       missingVariables.push(
         "INSTAGRAM_REDIRECT_URI"
       );
@@ -1152,7 +1122,6 @@ app.get(
 
 
     if (!OAUTH_STATE_SECRET) {
-
       missingVariables.push(
         "OAUTH_STATE_SECRET"
       );
@@ -1166,7 +1135,6 @@ app.get(
       return res
         .status(500)
         .send(`
-
           <h2>
             Instagram OAuth
             is not configured
@@ -1184,8 +1152,7 @@ ${escapeHtml(
 
           <p>
             <a href="/instagram-admin">
-              Return to
-              Enzhi Crew Automation
+              Return
             </a>
           </p>
         `);
@@ -1211,7 +1178,6 @@ ${escapeHtml(
       return res
         .status(500)
         .send(`
-
           <h2>
             Instagram OAuth
             is not configured
@@ -1245,17 +1211,13 @@ ${escapeHtml(
           "code",
 
         scope: [
-
           "instagram_business_basic",
-
           "instagram_business_manage_messages",
-
           "instagram_business_manage_comments",
-
         ].join(","),
-   
+
         force_reauth:
-      "true",
+          "true",
 
         state:
           state,
@@ -1285,35 +1247,43 @@ app.get(
 
   async function (req, res) {
 
-   console.log(
-  "Instagram OAuth callback received",
-  {
-    queryKeys: Object.keys(req.query),
+    console.log(
+      "Instagram OAuth callback received",
+      {
+        queryKeys:
+          Object.keys(req.query),
 
-    hasCode:
-      typeof req.query.code === "string" &&
-      req.query.code.length > 0,
+        hasCode:
+          typeof req.query.code ===
+            "string" &&
+          req.query.code.length > 0,
 
-    hasState:
-      typeof req.query.state === "string" &&
-      req.query.state.length > 0,
+        hasState:
+          typeof req.query.state ===
+            "string" &&
+          req.query.state.length > 0,
 
-    error:
-      req.query.error || null,
+        error:
+          req.query.error ||
+          null,
 
-    errorReason:
-      req.query.error_reason || null,
+        errorReason:
+          req.query.error_reason ||
+          null,
 
-    errorDescription:
-      req.query.error_description || null,
+        errorDescription:
+          req.query.error_description ||
+          null,
 
-    userAgent:
-      req.headers["user-agent"] || null,
+        userAgent:
+          req.headers["user-agent"] ||
+          null,
 
-    referer:
-      req.headers["referer"] || null,
-  }
-);
+        referer:
+          req.headers["referer"] ||
+          null,
+      }
+    );
 
 
     const authorizationCode =
@@ -1323,28 +1293,19 @@ app.get(
       req.query.state;
 
 
-    /**
-     * Instagram вернул ошибку.
-     */
-
     if (req.query.error) {
 
       return res
         .status(400)
         .send(`
-
           <h2>
             Instagram authorization cancelled
           </h2>
 
           <p>
             ${escapeHtml(
-              req.query
-                .error_description ||
-
-              req.query
-                .error_reason ||
-
+              req.query.error_description ||
+              req.query.error_reason ||
               req.query.error
             )}
           </p>
@@ -1358,25 +1319,18 @@ app.get(
     }
 
 
-    /**
-     * Нет authorization code.
-     */
-
     if (!authorizationCode) {
 
       return res
         .status(400)
         .send(`
-
           <h2>
-            Authorization code
-            is missing
+            Authorization code is missing
           </h2>
 
           <p>
-            Instagram did not
-            return an authorization
-            code.
+            Instagram did not return
+            an authorization code.
           </p>
 
           <p>
@@ -1388,10 +1342,6 @@ app.get(
     }
 
 
-    /**
-     * Проверяем state.
-     */
-
     if (
       !validateOAuthState(
         returnedState
@@ -1401,7 +1351,6 @@ app.get(
       return res
         .status(403)
         .send(`
-
           <h2>
             Invalid OAuth state
           </h2>
@@ -1440,24 +1389,20 @@ app.get(
         INSTAGRAM_APP_ID
       );
 
-
       tokenForm.append(
         "client_secret",
         INSTAGRAM_APP_SECRET
       );
-
 
       tokenForm.append(
         "grant_type",
         "authorization_code"
       );
 
-
       tokenForm.append(
         "redirect_uri",
         INSTAGRAM_REDIRECT_URI
       );
-
 
       tokenForm.append(
         "code",
@@ -1466,9 +1411,8 @@ app.get(
 
 
       /**
-       * Получаем short-lived token.
+       * Short-lived token.
        */
-
       const shortTokenResponse =
         await axios.post(
 
@@ -1477,9 +1421,7 @@ app.get(
           tokenForm.toString(),
 
           {
-
             headers: {
-
               "Content-Type":
                 "application/x-www-form-urlencoded",
             },
@@ -1509,9 +1451,8 @@ app.get(
 
 
       /**
-       * Пробуем получить long-lived token.
+       * Long-lived token.
        */
-
       try {
 
         const longTokenResponse =
@@ -1520,7 +1461,6 @@ app.get(
             "https://graph.instagram.com/access_token",
 
             {
-
               params: {
 
                 grant_type:
@@ -1584,16 +1524,6 @@ app.get(
       }
 
 
-      /**
-       * Временно сохраняем токен
-       * в памяти Heroku dyno.
-       *
-       * После перезапуска снова
-       * используется Config Var:
-       *
-       * INSTAGRAM_ACCESS_TOKEN
-       */
-
       instagramAccessToken =
         finalToken;
 
@@ -1626,7 +1556,6 @@ app.get(
 
 
         errorMessage =
-
           error.response
             .data
             ?.error_message ||
@@ -1643,7 +1572,6 @@ app.get(
       return res
         .status(500)
         .send(`
-
           <h2>
             Instagram connection failed
           </h2>
@@ -1669,14 +1597,10 @@ app.get(
  * ======================================================
  * INSTAGRAM WEBHOOK VERIFICATION
  * ======================================================
- *
- * Meta вызывает этот GET
- * при настройке Callback URL.
  */
 
 app.get(
   "/instagram",
-
   function (req, res) {
 
     const mode =
@@ -1698,7 +1622,6 @@ app.get(
     console.log(
       "Instagram webhook verification request",
       {
-
         mode:
           mode || null,
 
@@ -1724,12 +1647,9 @@ app.get(
 
     if (
       mode === "subscribe" &&
-
       VERIFY_TOKEN &&
-
       receivedToken ===
         VERIFY_TOKEN &&
-
       challenge
     ) {
 
@@ -1772,7 +1692,6 @@ app.get(
 
 app.get(
   "/facebook",
-
   function (req, res) {
 
     const mode =
@@ -1793,12 +1712,9 @@ app.get(
 
     if (
       mode === "subscribe" &&
-
       VERIFY_TOKEN &&
-
       receivedToken ===
         VERIFY_TOKEN &&
-
       challenge
     ) {
 
@@ -1828,7 +1744,6 @@ app.get(
 
 app.get(
   "/threads",
-
   function (req, res) {
 
     const mode =
@@ -1849,12 +1764,9 @@ app.get(
 
     if (
       mode === "subscribe" &&
-
       VERIFY_TOKEN &&
-
       receivedToken ===
         VERIFY_TOKEN &&
-
       challenge
     ) {
 
@@ -1884,7 +1796,6 @@ app.get(
 
 app.post(
   "/facebook",
-
   function (req, res) {
 
     console.log(
@@ -1954,10 +1865,6 @@ app.post(
     );
 
 
-    /**
-     * Проверяем подпись Meta.
-     */
-
     if (
       !verifyMetaSignature(req)
     ) {
@@ -1972,25 +1879,28 @@ app.post(
     }
 
 
+    /**
+     * Сохраняем webhook.
+     */
     rememberUpdate(
       req.body
     );
 
 
     /**
-     * Сначала отвечаем Meta.
+     * Отвечаем Meta сразу.
      */
-
     res.sendStatus(
       200
     );
 
 
     /**
-     * После этого пересылаем
-     * событие в Make.
+     * Затем пробуем отправить в Make.
+     *
+     * Ошибка Make НЕ удаляет webhook
+     * из receivedUpdates.
      */
-
     try {
 
       if (!MAKE_WEBHOOK) {
@@ -2008,9 +1918,7 @@ app.post(
         req.body,
 
         {
-
           headers: {
-
             "Content-Type":
               "application/json",
           },
@@ -2062,7 +1970,6 @@ app.post(
 
 app.post(
   "/threads",
-
   function (req, res) {
 
     console.log(
@@ -2088,9 +1995,14 @@ app.post(
     );
   }
 );
+
+
 /**
- * Instagram deauthorization callback
+ * ======================================================
+ * INSTAGRAM DEAUTHORIZE
+ * ======================================================
  */
+
 app.post(
   "/instagram/deauthorize",
   function (req, res) {
@@ -2100,17 +2012,27 @@ app.post(
     );
 
     console.log(
-      JSON.stringify(req.body, null, 2)
+      JSON.stringify(
+        req.body,
+        null,
+        2
+      )
     );
 
-    return res.sendStatus(200);
+
+    return res.sendStatus(
+      200
+    );
   }
 );
 
 
 /**
- * Instagram data deletion callback
+ * ======================================================
+ * INSTAGRAM DATA DELETION
+ * ======================================================
  */
+
 app.post(
   "/instagram/data-deletion",
   function (req, res) {
@@ -2119,177 +2041,219 @@ app.post(
       "Instagram data deletion request received"
     );
 
+
     const confirmationCode =
       crypto
         .randomBytes(12)
         .toString("hex");
 
-    return res.status(200).json({
-      url:
-        `https://${req.get("host")}/instagram/data-deletion/status?code=${confirmationCode}`,
 
-      confirmation_code:
-        confirmationCode,
-    });
+    return res
+      .status(200)
+      .json({
+
+        url:
+          `https://${req.get("host")}/instagram/data-deletion/status?code=${confirmationCode}`,
+
+        confirmation_code:
+          confirmationCode,
+      });
   }
 );
 
 
-/**
- * Instagram data deletion status
- */
 app.get(
   "/instagram/data-deletion/status",
   function (req, res) {
 
-    return res.status(200).send(`
-      <h2>
-        Data deletion request
-      </h2>
+    return res
+      .status(200)
+      .send(`
+        <h2>
+          Data deletion request
+        </h2>
 
-      <p>
-        Your Instagram data deletion
-        request has been received.
-      </p>
+        <p>
+          Your Instagram data deletion
+          request has been received.
+        </p>
 
-      <p>
-        Confirmation code:
-        ${escapeHtml(
-          req.query.code || ""
-        )}
-      </p>
-    `);
+        <p>
+          Confirmation code:
+          ${escapeHtml(
+            req.query.code || ""
+          )}
+        </p>
+      `);
   }
 );
 
+
 /**
- * Страница Instagram Direct.
+ * ======================================================
+ * INSTAGRAM MESSAGES PAGE
+ * ======================================================
  */
+
 app.get(
   "/instagram-messages",
   function (req, res) {
+
     res.set(
       "Cache-Control",
       "no-store"
     );
 
+
     const messages =
       getRecentInstagramMessages();
+
+
+    console.log(
+      "Instagram messages page opened",
+      {
+        receivedUpdates:
+          receivedUpdates.length,
+
+        parsedMessages:
+          messages.length,
+      }
+    );
+
 
     const sentSuccessfully =
       req.query.sent === "1";
 
+
     const subscribedSuccessfully =
       req.query.subscribed === "1";
 
+
     const errorMessage =
       req.query.error
-        ? String(req.query.error)
+        ? String(
+            req.query.error
+          )
         : null;
 
 
     const incomingHtml =
       messages.length > 0
+
         ? messages
-            .map(function (message) {
+            .map(
+              function (message) {
 
-              let time = "";
+                let time = "";
 
-              if (message.timestamp) {
-                try {
-                  time =
-                    new Date(
-                      message.timestamp
-                    ).toLocaleString(
-                      "ru-RU"
-                    );
-                } catch (_) {
-                  time = "";
+
+                if (
+                  message.timestamp
+                ) {
+
+                  try {
+
+                    time =
+                      new Date(
+                        message.timestamp
+                      ).toLocaleString(
+                        "ru-RU"
+                      );
+
+                  } catch (_) {
+
+                    time = "";
+                  }
                 }
-              }
-
-              return `
-                <div class="message-card">
-
-                  <div class="message-header">
-
-                    <strong>
-                      Incoming message
-                    </strong>
-
-                    ${
-                      time
-                        ? `
-                          <span class="time">
-                            ${escapeHtml(time)}
-                          </span>
-                        `
-                        : ""
-                    }
-
-                  </div>
 
 
-                  <div class="label">
-                    Instagram user ID
-                  </div>
+                return `
+                  <div class="message-card">
 
-                  <div class="sender">
-                    ${escapeHtml(
-                      message.senderId
-                    )}
-                  </div>
+                    <div class="message-header">
+
+                      <strong>
+                        Incoming message
+                      </strong>
+
+                      ${
+                        time
+                          ? `
+                            <span class="time">
+                              ${escapeHtml(
+                                time
+                              )}
+                            </span>
+                          `
+                          : ""
+                      }
+
+                    </div>
 
 
-                  <div class="label">
-                    Message
-                  </div>
+                    <div class="label">
+                      Instagram user ID
+                    </div>
 
-                  <div class="message-text">
-                    ${escapeHtml(
-                      message.text
-                    )}
-                  </div>
-
-
-                  <form
-                    method="POST"
-                    action="/instagram-messages/send"
-                  >
-
-                    <input
-                      type="hidden"
-                      name="recipientId"
-                      value="${escapeHtml(
+                    <div class="sender">
+                      ${escapeHtml(
                         message.senderId
-                      )}"
+                      )}
+                    </div>
+
+
+                    <div class="label">
+                      Message
+                    </div>
+
+                    <div class="message-text">
+                      ${escapeHtml(
+                        message.text
+                      )}
+                    </div>
+
+
+                    <form
+                      method="POST"
+                      action="/instagram-messages/send"
                     >
 
-
-                    <label>
-                      Reply
-                    </label>
-
-                    <textarea
-                      name="text"
-                      placeholder="Type your reply..."
-                      required
-                    ></textarea>
+                      <input
+                        type="hidden"
+                        name="recipientId"
+                        value="${escapeHtml(
+                          message.senderId
+                        )}"
+                      >
 
 
-                    <button
-                      type="submit"
-                      class="reply-button"
-                    >
-                      Send Reply
-                    </button>
+                      <label>
+                        Reply
+                      </label>
 
-                  </form>
 
-                </div>
-              `;
-            })
+                      <textarea
+                        name="text"
+                        placeholder="Type your reply..."
+                        required
+                      ></textarea>
+
+
+                      <button
+                        type="submit"
+                        class="reply-button"
+                      >
+                        Send Reply
+                      </button>
+
+                    </form>
+
+                  </div>
+                `;
+              }
+            )
             .join("")
+
         : `
           <div class="empty-card">
 
@@ -2309,29 +2273,37 @@ app.get(
 
     const sentHtml =
       sent_messages.length > 0
+
         ? sent_messages
-            .slice(0, 10)
-            .map(function (message) {
-              return `
-                <div class="sent-message">
+            .slice(
+              0,
+              10
+            )
+            .map(
+              function (message) {
 
-                  <strong>
-                    Sent to
-                    ${escapeHtml(
-                      message.recipientId
-                    )}
-                  </strong>
+                return `
+                  <div class="sent-message">
 
-                  <div>
-                    ${escapeHtml(
-                      message.text
-                    )}
+                    <strong>
+                      Sent to
+                      ${escapeHtml(
+                        message.recipientId
+                      )}
+                    </strong>
+
+                    <div>
+                      ${escapeHtml(
+                        message.text
+                      )}
+                    </div>
+
                   </div>
-
-                </div>
-              `;
-            })
+                `;
+              }
+            )
             .join("")
+
         : `
           <p class="muted">
             No replies sent during this
@@ -2340,10 +2312,12 @@ app.get(
         `;
 
 
-    res.status(200).send(`
-      <!DOCTYPE html>
+    return res
+      .status(200)
+      .send(`
+        <!DOCTYPE html>
 
-      <html lang="en">
+        <html lang="en">
 
         <head>
 
@@ -2351,8 +2325,7 @@ app.get(
 
           <meta
             name="viewport"
-            content="width=device-width,
-                     initial-scale=1.0"
+            content="width=device-width, initial-scale=1.0"
           >
 
           <title>
@@ -2363,9 +2336,9 @@ app.get(
           <style>
 
             * {
-              box-sizing: border-box;
+              box-sizing:
+                border-box;
             }
-
 
             body {
               margin: 0;
@@ -2379,23 +2352,19 @@ app.get(
                 sans-serif;
             }
 
-
             .container {
               max-width: 850px;
               margin: 0 auto;
             }
 
-
             h1 {
               margin-bottom: 6px;
             }
-
 
             .subtitle {
               color: #667085;
               margin-bottom: 25px;
             }
-
 
             .top-actions {
               display: flex;
@@ -2403,7 +2372,6 @@ app.get(
               flex-wrap: wrap;
               margin-bottom: 24px;
             }
-
 
             .button {
               display: inline-block;
@@ -2418,11 +2386,9 @@ app.get(
               font-size: 14px;
             }
 
-
             .secondary {
               background: #344054;
             }
-
 
             .message-card,
             .empty-card {
@@ -2433,21 +2399,17 @@ app.get(
               margin-bottom: 18px;
             }
 
-
             .message-header {
               display: flex;
-              justify-content:
-                space-between;
+              justify-content: space-between;
               gap: 15px;
               margin-bottom: 20px;
             }
-
 
             .time {
               color: #667085;
               font-size: 13px;
             }
-
 
             .label {
               color: #667085;
@@ -2456,11 +2418,9 @@ app.get(
               margin-bottom: 5px;
             }
 
-
             .sender {
               font-weight: 700;
             }
-
 
             .message-text {
               padding: 14px;
@@ -2471,25 +2431,19 @@ app.get(
               white-space: pre-wrap;
             }
 
-
             textarea {
               display: block;
               width: 100%;
               min-height: 90px;
               resize: vertical;
-
               margin-top: 7px;
               margin-bottom: 12px;
-
               padding: 12px;
-
               border: 1px solid #d0d5dd;
               border-radius: 9px;
-
               font-family: inherit;
               font-size: 14px;
             }
-
 
             .reply-button {
               padding: 11px 18px;
@@ -2501,7 +2455,6 @@ app.get(
               cursor: pointer;
             }
 
-
             .success {
               padding: 14px;
               margin-bottom: 18px;
@@ -2509,14 +2462,12 @@ app.get(
               background: #ecfdf3;
             }
 
-
             .error {
               padding: 14px;
               margin-bottom: 18px;
               border-radius: 10px;
               background: #fff1f0;
             }
-
 
             .sent-message {
               background: white;
@@ -2526,11 +2477,9 @@ app.get(
               margin-bottom: 10px;
             }
 
-
             .sent-message div {
               margin-top: 8px;
             }
-
 
             .muted {
               color: #667085;
@@ -2644,21 +2593,27 @@ app.get(
 
         </body>
 
-      </html>
-    `);
+        </html>
+      `);
   }
 );
 
 
 /**
- * Подписываем подключённый Instagram
- * аккаунт на webhook messages.
+ * ======================================================
+ * ENABLE INSTAGRAM MESSAGE WEBHOOKS
+ * ======================================================
  */
+
 app.post(
   "/instagram-messages/subscribe",
+
   async function (req, res) {
 
-    if (!instagramAccessToken) {
+    if (
+      !instagramAccessToken
+    ) {
+
       return res.redirect(
         "/instagram-messages?error=" +
         encodeURIComponent(
@@ -2670,13 +2625,11 @@ app.post(
 
     try {
 
-      /*
-       * Сначала узнаём ID
-       * подключённого Instagram аккаунта.
-       */
       const profileResponse =
         await axios.get(
+
           `https://graph.instagram.com/${INSTAGRAM_API_VERSION}/me`,
+
           {
             params: {
               fields:
@@ -2688,7 +2641,8 @@ app.post(
                 `Bearer ${instagramAccessToken}`,
             },
 
-            timeout: 15000,
+            timeout:
+              15000,
           }
         );
 
@@ -2699,21 +2653,22 @@ app.post(
 
 
       if (!instagramUserId) {
+
         throw new Error(
           "Instagram account ID was not returned."
         );
       }
 
 
-      /*
-       * Включаем webhook messages
-       * для конкретного Instagram аккаунта.
-       */
       await axios.post(
+
         `https://graph.instagram.com/${INSTAGRAM_API_VERSION}/${instagramUserId}/subscribed_apps`,
+
         null,
+
         {
           params: {
+
             subscribed_fields:
               "messages",
 
@@ -2721,7 +2676,8 @@ app.post(
               instagramAccessToken,
           },
 
-          timeout: 15000,
+          timeout:
+            15000,
         }
       );
 
@@ -2738,6 +2694,7 @@ app.post(
       return res.redirect(
         "/instagram-messages?subscribed=1"
       );
+
 
     } catch (error) {
 
@@ -2764,14 +2721,17 @@ app.post(
 
         message =
           error.response.data
-            ?.error?.message ||
+            ?.error
+            ?.message ||
           message;
       }
 
 
       return res.redirect(
         "/instagram-messages?error=" +
-        encodeURIComponent(message)
+        encodeURIComponent(
+          message
+        )
       );
     }
   }
@@ -2779,22 +2739,27 @@ app.post(
 
 
 /**
- * Отправляем ответ пользователю
- * через Instagram Messaging API.
+ * ======================================================
+ * SEND INSTAGRAM MESSAGE
+ * ======================================================
  */
+
 app.post(
   "/instagram-messages/send",
+
   async function (req, res) {
 
     const recipientId =
       String(
-        req.body.recipientId || ""
+        req.body.recipientId ||
+        ""
       ).trim();
 
 
     const text =
       String(
-        req.body.text || ""
+        req.body.text ||
+        ""
       ).trim();
 
 
@@ -2831,10 +2796,6 @@ app.post(
     }
 
 
-    /*
-     * Meta ограничивает текст
-     * сообщения 1000 байтами.
-     */
     if (
       Buffer.byteLength(
         text,
@@ -2855,20 +2816,24 @@ app.post(
 
       const response =
         await axios.post(
+
           `https://graph.instagram.com/${INSTAGRAM_API_VERSION}/me/messages`,
 
           {
             recipient: {
-              id: recipientId,
+              id:
+                recipientId,
             },
 
             message: {
-              text: text,
+              text:
+                text,
             },
           },
 
           {
             headers: {
+
               Authorization:
                 `Bearer ${instagramAccessToken}`,
 
@@ -2879,7 +2844,8 @@ app.post(
                 "application/json",
             },
 
-            timeout: 15000,
+            timeout:
+              15000,
           }
         );
 
@@ -2891,13 +2857,15 @@ app.post(
             recipientId,
 
           messageId:
-            response.data?.message_id ||
+            response.data
+              ?.message_id ||
             null,
         }
       );
 
 
       sent_messages.unshift({
+
         recipientId:
           recipientId,
 
@@ -2908,22 +2876,29 @@ app.post(
           Date.now(),
 
         messageId:
-          response.data?.message_id ||
+          response.data
+            ?.message_id ||
           "",
       });
 
 
       if (
-        sent_messages.length > 30
+        sent_messages.length >
+        30
       ) {
+
         sent_messages =
-          sent_messages.slice(0, 30);
+          sent_messages.slice(
+            0,
+            30
+          );
       }
 
 
       return res.redirect(
         "/instagram-messages?sent=1"
       );
+
 
     } catch (error) {
 
@@ -2950,18 +2925,74 @@ app.post(
 
         message =
           error.response.data
-            ?.error?.message ||
+            ?.error
+            ?.message ||
           message;
       }
 
 
       return res.redirect(
         "/instagram-messages?error=" +
-        encodeURIComponent(message)
+        encodeURIComponent(
+          message
+        )
       );
     }
   }
 );
+
+
+/**
+ * ======================================================
+ * DEBUG
+ * ======================================================
+ *
+ * Можно удалить после завершения тестирования.
+ */
+
+app.get(
+  "/debug-instagram",
+
+  function (req, res) {
+
+    let parsedMessages = [];
+
+
+    try {
+
+      parsedMessages =
+        getRecentInstagramMessages();
+
+    } catch (error) {
+
+      parsedMessages = [
+        {
+          parserError:
+            error.message,
+        },
+      ];
+    }
+
+
+    return res
+      .status(200)
+      .json({
+
+        updatesCount:
+          receivedUpdates.length,
+
+        latestUpdate:
+          receivedUpdates.length
+            ? receivedUpdates[0]
+            : null,
+
+        parsedMessages:
+          parsedMessages,
+      });
+  }
+);
+
+
 /**
  * ======================================================
  * 404
@@ -2974,19 +3005,14 @@ app.use(
     return res
       .status(404)
       .send(`
-
         <h2>
           Page not found
         </h2>
 
         <p>
-
           <a href="/instagram-admin">
-
             Open Enzhi Crew Automation
-
           </a>
-
         </p>
       `);
   }
