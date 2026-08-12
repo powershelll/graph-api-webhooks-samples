@@ -2992,7 +2992,188 @@ app.get(
   }
 );
 
+/**
+ * ======================================================
+ * INSTAGRAM CONVERSATIONS DEBUG
+ * ======================================================
+ */
 
+app.get(
+  "/instagram-conversations",
+
+  async function (req, res) {
+
+    res.set(
+      "Cache-Control",
+      "no-store"
+    );
+
+
+    if (!instagramAccessToken) {
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+          error:
+            "Instagram access token is missing.",
+        });
+    }
+
+
+    try {
+
+      /**
+       * Сначала получаем ID
+       * подключённого Instagram аккаунта.
+       */
+      const profileResponse =
+        await axios.get(
+
+          `https://graph.instagram.com/${INSTAGRAM_API_VERSION}/me`,
+
+          {
+            params: {
+              fields:
+                "user_id,username",
+            },
+
+            headers: {
+              Authorization:
+                `Bearer ${instagramAccessToken}`,
+            },
+
+            timeout:
+              15000,
+          }
+        );
+
+
+      const instagramUserId =
+        profileResponse.data.user_id ||
+        profileResponse.data.id;
+
+
+      /**
+       * Получаем список Direct conversations.
+       */
+      const conversationsResponse =
+        await axios.get(
+
+          `https://graph.instagram.com/${INSTAGRAM_API_VERSION}/${instagramUserId}/conversations`,
+
+          {
+            params: {
+              platform:
+                "instagram",
+
+              fields:
+                "id,updated_time",
+
+              limit:
+                20,
+            },
+
+            headers: {
+              Authorization:
+                `Bearer ${instagramAccessToken}`,
+            },
+
+            timeout:
+              15000,
+          }
+        );
+
+
+      return res
+        .status(200)
+        .json({
+
+          success:
+            true,
+
+          account: {
+            id:
+              instagramUserId,
+
+            username:
+              profileResponse
+                .data
+                .username ||
+              null,
+          },
+
+          conversations:
+            conversationsResponse
+              .data
+              .data ||
+            [],
+
+          paging:
+            conversationsResponse
+              .data
+              .paging ||
+            null,
+        });
+
+
+    } catch (error) {
+
+      console.error(
+        "Instagram conversations request failed"
+      );
+
+
+      if (error.response) {
+
+        console.error(
+          JSON.stringify(
+            error.response.data,
+            null,
+            2
+          )
+        );
+
+
+        return res
+          .status(
+            error.response.status ||
+            500
+          )
+          .json({
+
+            success:
+              false,
+
+            status:
+              error.response.status,
+
+            error:
+              error.response
+                .data
+                ?.error
+                ?.message ||
+              "Instagram API error",
+
+            details:
+              error.response.data,
+          });
+      }
+
+
+      return res
+        .status(500)
+        .json({
+
+          success:
+            false,
+
+          error:
+            error.message,
+        });
+    }
+  }
+);
 /**
  * ======================================================
  * 404
