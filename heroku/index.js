@@ -68,8 +68,13 @@ app.use(
     },
   })
 );
-
-
+app.use(
+  bodyParser.urlencoded({
+    extended: false,
+  })
+);
+let received_updates = [];
+let sent_messages = [];
 /**
  * ======================================================
  * HELPERS
@@ -84,7 +89,79 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
+function getRecentInstagramMessages() {
+  const messages = [];
 
+  for (const update of received_updates) {
+    if (
+      !update ||
+      update.object !== "instagram"
+    ) {
+      continue;
+    }
+
+    const entries =
+      Array.isArray(update.entry)
+        ? update.entry
+        : [];
+
+    for (const entry of entries) {
+      const events =
+        Array.isArray(entry.messaging)
+          ? entry.messaging
+          : [];
+
+      for (const event of events) {
+        /*
+         * Нам нужны только реальные
+         * входящие сообщения.
+         */
+        if (!event.message) {
+          continue;
+        }
+
+        if (event.message.is_echo) {
+          continue;
+        }
+
+        const text =
+          typeof event.message.text === "string"
+            ? event.message.text
+            : "";
+
+        if (!text) {
+          continue;
+        }
+
+        messages.push({
+          senderId:
+            String(
+              event.sender?.id || ""
+            ),
+
+          recipientId:
+            String(
+              event.recipient?.id || ""
+            ),
+
+          text: text,
+
+          timestamp:
+            Number(
+              event.timestamp || 0
+            ),
+
+          messageId:
+            String(
+              event.message?.mid || ""
+            ),
+        });
+      }
+    }
+  }
+
+  return messages.slice(0, 30);
+}
 
 function toBase64Url(value) {
   return value
@@ -1933,6 +2010,806 @@ app.get(
   }
 );
 
+/**
+ * Страница Instagram Direct.
+ */
+app.get(
+  "/instagram-messages",
+  function (req, res) {
+    res.set(
+      "Cache-Control",
+      "no-store"
+    );
+
+    const messages =
+      getRecentInstagramMessages();
+
+    const sentSuccessfully =
+      req.query.sent === "1";
+
+    const subscribedSuccessfully =
+      req.query.subscribed === "1";
+
+    const errorMessage =
+      req.query.error
+        ? String(req.query.error)
+        : null;
+
+
+    const incomingHtml =
+      messages.length > 0
+        ? messages
+            .map(function (message) {
+
+              let time = "";
+
+              if (message.timestamp) {
+                try {
+                  time =
+                    new Date(
+                      message.timestamp
+                    ).toLocaleString(
+                      "ru-RU"
+                    );
+                } catch (_) {
+                  time = "";
+                }
+              }
+
+              return `
+                <div class="message-card">
+
+                  <div class="message-header">
+
+                    <strong>
+                      Incoming message
+                    </strong>
+
+                    ${
+                      time
+                        ? `
+                          <span class="time">
+                            ${escapeHtml(time)}
+                          </span>
+                        `
+                        : ""
+                    }
+
+                  </div>
+
+
+                  <div class="label">
+                    Instagram user ID
+                  </div>
+
+                  <div class="sender">
+                    ${escapeHtml(
+                      message.senderId
+                    )}
+                  </div>
+
+
+                  <div class="label">
+                    Message
+                  </div>
+
+                  <div class="message-text">
+                    ${escapeHtml(
+                      message.text
+                    )}
+                  </div>
+
+
+                  <form
+                    method="POST"
+                    action="/instagram-messages/send"
+                  >
+
+                    <input
+                      type="hidden"
+                      name="recipientId"
+                      value="${escapeHtml(
+                        message.senderId
+                      )}"
+                    >
+
+
+                    <label>
+                      Reply
+                    </label>
+
+                    <textarea
+                      name="text"
+                      placeholder="Type your reply..."
+                      required
+                    ></textarea>
+
+
+                    <button
+                      type="submit"
+                      class="reply-button"
+                    >
+                      Send Reply
+                    </button>
+
+                  </form>
+
+                </div>
+              `;
+            })
+            .join("")
+        : `
+          <div class="empty-card">
+
+            <strong>
+              No incoming messages yet
+            </strong>
+
+            <p>
+              Send a Direct message to the
+              connected Instagram account
+              from another Instagram account.
+            </p>
+
+          </div>
+        `;
+
+
+    const sentHtml =
+      sent_messages.length > 0
+        ? sent_messages
+            .slice(0, 10)
+            .map(function (message) {
+              return `
+                <div class="sent-message">
+
+                  <strong>
+                    Sent to
+                    ${escapeHtml(
+                      message.recipientId
+                    )}
+                  </strong>
+
+                  <div>
+                    ${escapeHtml(
+                      message.text
+                    )}
+                  </div>
+
+                </div>
+              `;
+            })
+            .join("")
+        : `
+          <p class="muted">
+            No replies sent during this
+            server session.
+          </p>
+        `;
+
+
+    res.status(200).send(`
+      <!DOCTYPE html>
+
+      <html lang="en">
+
+        <head>
+
+          <meta charset="UTF-8">
+
+          <meta
+            name="viewport"
+            content="width=device-width,
+                     initial-scale=1.0"
+          >
+
+          <title>
+            Instagram Messages
+          </title>
+
+
+          <style>
+
+            * {
+              box-sizing: border-box;
+            }
+
+
+            body {
+              margin: 0;
+              padding: 30px;
+              background: #f5f6f8;
+              color: #182230;
+
+              font-family:
+                Arial,
+                Helvetica,
+                sans-serif;
+            }
+
+
+            .container {
+              max-width: 850px;
+              margin: 0 auto;
+            }
+
+
+            h1 {
+              margin-bottom: 6px;
+            }
+
+
+            .subtitle {
+              color: #667085;
+              margin-bottom: 25px;
+            }
+
+
+            .top-actions {
+              display: flex;
+              gap: 12px;
+              flex-wrap: wrap;
+              margin-bottom: 24px;
+            }
+
+
+            .button {
+              display: inline-block;
+              padding: 11px 16px;
+              border: 0;
+              border-radius: 9px;
+              background: #0866ff;
+              color: white;
+              text-decoration: none;
+              cursor: pointer;
+              font-weight: 700;
+              font-size: 14px;
+            }
+
+
+            .secondary {
+              background: #344054;
+            }
+
+
+            .message-card,
+            .empty-card {
+              background: white;
+              border: 1px solid #e4e7ec;
+              border-radius: 14px;
+              padding: 22px;
+              margin-bottom: 18px;
+            }
+
+
+            .message-header {
+              display: flex;
+              justify-content:
+                space-between;
+              gap: 15px;
+              margin-bottom: 20px;
+            }
+
+
+            .time {
+              color: #667085;
+              font-size: 13px;
+            }
+
+
+            .label {
+              color: #667085;
+              font-size: 12px;
+              margin-top: 12px;
+              margin-bottom: 5px;
+            }
+
+
+            .sender {
+              font-weight: 700;
+            }
+
+
+            .message-text {
+              padding: 14px;
+              background: #f9fafb;
+              border-radius: 9px;
+              line-height: 1.5;
+              margin-bottom: 20px;
+              white-space: pre-wrap;
+            }
+
+
+            textarea {
+              display: block;
+              width: 100%;
+              min-height: 90px;
+              resize: vertical;
+
+              margin-top: 7px;
+              margin-bottom: 12px;
+
+              padding: 12px;
+
+              border: 1px solid #d0d5dd;
+              border-radius: 9px;
+
+              font-family: inherit;
+              font-size: 14px;
+            }
+
+
+            .reply-button {
+              padding: 11px 18px;
+              border: 0;
+              border-radius: 9px;
+              background: #12b76a;
+              color: white;
+              font-weight: 700;
+              cursor: pointer;
+            }
+
+
+            .success {
+              padding: 14px;
+              margin-bottom: 18px;
+              border-radius: 10px;
+              background: #ecfdf3;
+            }
+
+
+            .error {
+              padding: 14px;
+              margin-bottom: 18px;
+              border-radius: 10px;
+              background: #fff1f0;
+            }
+
+
+            .sent-message {
+              background: white;
+              border: 1px solid #e4e7ec;
+              border-radius: 10px;
+              padding: 14px;
+              margin-bottom: 10px;
+            }
+
+
+            .sent-message div {
+              margin-top: 8px;
+            }
+
+
+            .muted {
+              color: #667085;
+            }
+
+          </style>
+
+        </head>
+
+
+        <body>
+
+          <main class="container">
+
+            <h1>
+              Instagram Messages
+            </h1>
+
+
+            <p class="subtitle">
+              Enzhi Crew Automation
+            </p>
+
+
+            <div class="top-actions">
+
+              <a
+                class="button secondary"
+                href="/instagram-admin"
+              >
+                Instagram Account
+              </a>
+
+
+              <a
+                class="button"
+                href="/instagram-messages"
+              >
+                Refresh Messages
+              </a>
+
+
+              <form
+                method="POST"
+                action="/instagram-messages/subscribe"
+                style="margin:0"
+              >
+
+                <button
+                  class="button"
+                  type="submit"
+                >
+                  Enable Message Webhooks
+                </button>
+
+              </form>
+
+            </div>
+
+
+            ${
+              sentSuccessfully
+                ? `
+                  <div class="success">
+                    Message sent successfully.
+                  </div>
+                `
+                : ""
+            }
+
+
+            ${
+              subscribedSuccessfully
+                ? `
+                  <div class="success">
+                    Instagram account subscribed
+                    to message webhooks.
+                  </div>
+                `
+                : ""
+            }
+
+
+            ${
+              errorMessage
+                ? `
+                  <div class="error">
+                    ${escapeHtml(
+                      errorMessage
+                    )}
+                  </div>
+                `
+                : ""
+            }
+
+
+            <h2>
+              Incoming
+            </h2>
+
+            ${incomingHtml}
+
+
+            <h2>
+              Sent replies
+            </h2>
+
+            ${sentHtml}
+
+          </main>
+
+        </body>
+
+      </html>
+    `);
+  }
+);
+
+
+/**
+ * Подписываем подключённый Instagram
+ * аккаунт на webhook messages.
+ */
+app.post(
+  "/instagram-messages/subscribe",
+  async function (req, res) {
+
+    if (!instagramAccessToken) {
+      return res.redirect(
+        "/instagram-messages?error=" +
+        encodeURIComponent(
+          "Instagram access token is missing."
+        )
+      );
+    }
+
+
+    try {
+
+      /*
+       * Сначала узнаём ID
+       * подключённого Instagram аккаунта.
+       */
+      const profileResponse =
+        await axios.get(
+          `https://graph.instagram.com/${INSTAGRAM_API_VERSION}/me`,
+          {
+            params: {
+              fields:
+                "user_id,username",
+            },
+
+            headers: {
+              Authorization:
+                `Bearer ${instagramAccessToken}`,
+            },
+
+            timeout: 15000,
+          }
+        );
+
+
+      const instagramUserId =
+        profileResponse.data.user_id ||
+        profileResponse.data.id;
+
+
+      if (!instagramUserId) {
+        throw new Error(
+          "Instagram account ID was not returned."
+        );
+      }
+
+
+      /*
+       * Включаем webhook messages
+       * для конкретного Instagram аккаунта.
+       */
+      await axios.post(
+        `https://graph.instagram.com/${INSTAGRAM_API_VERSION}/${instagramUserId}/subscribed_apps`,
+        null,
+        {
+          params: {
+            subscribed_fields:
+              "messages",
+
+            access_token:
+              instagramAccessToken,
+          },
+
+          timeout: 15000,
+        }
+      );
+
+
+      console.log(
+        "Instagram messages webhook subscription enabled",
+        {
+          instagramUserId:
+            instagramUserId,
+        }
+      );
+
+
+      return res.redirect(
+        "/instagram-messages?subscribed=1"
+      );
+
+    } catch (error) {
+
+      console.log(
+        "Instagram webhook subscription failed"
+      );
+
+
+      let message =
+        error.message ||
+        "Webhook subscription failed.";
+
+
+      if (error.response) {
+
+        console.log(
+          JSON.stringify(
+            error.response.data,
+            null,
+            2
+          )
+        );
+
+
+        message =
+          error.response.data
+            ?.error?.message ||
+          message;
+      }
+
+
+      return res.redirect(
+        "/instagram-messages?error=" +
+        encodeURIComponent(message)
+      );
+    }
+  }
+);
+
+
+/**
+ * Отправляем ответ пользователю
+ * через Instagram Messaging API.
+ */
+app.post(
+  "/instagram-messages/send",
+  async function (req, res) {
+
+    const recipientId =
+      String(
+        req.body.recipientId || ""
+      ).trim();
+
+
+    const text =
+      String(
+        req.body.text || ""
+      ).trim();
+
+
+    if (!instagramAccessToken) {
+
+      return res.redirect(
+        "/instagram-messages?error=" +
+        encodeURIComponent(
+          "Instagram access token is missing."
+        )
+      );
+    }
+
+
+    if (!recipientId) {
+
+      return res.redirect(
+        "/instagram-messages?error=" +
+        encodeURIComponent(
+          "Recipient Instagram ID is missing."
+        )
+      );
+    }
+
+
+    if (!text) {
+
+      return res.redirect(
+        "/instagram-messages?error=" +
+        encodeURIComponent(
+          "Message text is empty."
+        )
+      );
+    }
+
+
+    /*
+     * Meta ограничивает текст
+     * сообщения 1000 байтами.
+     */
+    if (
+      Buffer.byteLength(
+        text,
+        "utf8"
+      ) > 1000
+    ) {
+
+      return res.redirect(
+        "/instagram-messages?error=" +
+        encodeURIComponent(
+          "Message is longer than 1000 bytes."
+        )
+      );
+    }
+
+
+    try {
+
+      const response =
+        await axios.post(
+          `https://graph.instagram.com/${INSTAGRAM_API_VERSION}/me/messages`,
+
+          {
+            recipient: {
+              id: recipientId,
+            },
+
+            message: {
+              text: text,
+            },
+          },
+
+          {
+            headers: {
+              Authorization:
+                `Bearer ${instagramAccessToken}`,
+
+              "Content-Type":
+                "application/json",
+
+              Accept:
+                "application/json",
+            },
+
+            timeout: 15000,
+          }
+        );
+
+
+      console.log(
+        "Instagram message sent",
+        {
+          recipientId:
+            recipientId,
+
+          messageId:
+            response.data?.message_id ||
+            null,
+        }
+      );
+
+
+      sent_messages.unshift({
+        recipientId:
+          recipientId,
+
+        text:
+          text,
+
+        timestamp:
+          Date.now(),
+
+        messageId:
+          response.data?.message_id ||
+          "",
+      });
+
+
+      if (
+        sent_messages.length > 30
+      ) {
+        sent_messages =
+          sent_messages.slice(0, 30);
+      }
+
+
+      return res.redirect(
+        "/instagram-messages?sent=1"
+      );
+
+    } catch (error) {
+
+      console.log(
+        "Instagram message send failed"
+      );
+
+
+      let message =
+        error.message ||
+        "Instagram message could not be sent.";
+
+
+      if (error.response) {
+
+        console.log(
+          JSON.stringify(
+            error.response.data,
+            null,
+            2
+          )
+        );
+
+
+        message =
+          error.response.data
+            ?.error?.message ||
+          message;
+      }
+
+
+      return res.redirect(
+        "/instagram-messages?error=" +
+        encodeURIComponent(message)
+      );
+    }
+  }
+);
 /**
  * ======================================================
  * 404
