@@ -57,7 +57,237 @@ const INSTAGRAM_API_VERSION =
   process.env.INSTAGRAM_API_VERSION ||
   "v26.0";
 
+/**
+ * ======================================================
+ * VK CONFIG
+ * ======================================================
+ */
 
+const VK_APP_ID =
+  process.env.VK_APP_ID ||
+  "54695788";
+
+const VK_GROUP_ID =
+  String(
+    process.env.VK_GROUP_ID ||
+    "197890975"
+  ).replace(/^-/, "");
+
+const VK_REDIRECT_URI =
+  process.env.VK_REDIRECT_URI ||
+  "https://auth.enzhicrew.ru/vk-auth";
+
+const VK_API_VERSION =
+  "5.199";
+
+const VK_POST_SECRET =
+  process.env.VK_POST_SECRET ||
+  null;
+
+
+/**
+ * Токен сначала живёт в памяти.
+ *
+ * После первого успешного теста можно
+ * сохранить его в Heroku Config Vars.
+ */
+let vkAccessToken =
+  process.env.VK_ACCESS_TOKEN ||
+  null;
+
+let vkRefreshToken =
+  process.env.VK_REFRESH_TOKEN ||
+  null;
+
+let vkDeviceId =
+  process.env.VK_DEVICE_ID ||
+  null;
+
+
+/**
+ * ======================================================
+ * FIXIE — ОДИН СТАТИЧЕСКИЙ IP
+ * ======================================================
+ */
+
+function getVkProxy() {
+
+  const proxyUrl =
+    process.env.VK_FIXIE_URL;
+
+  if (!proxyUrl) {
+
+    throw new Error(
+      "VK_FIXIE_URL is not configured"
+    );
+  }
+
+  const parsed =
+    new URL(proxyUrl);
+
+  return {
+
+    protocol:
+      parsed.protocol.replace(":", ""),
+
+    host:
+      parsed.hostname,
+
+    port:
+      Number(
+        parsed.port || 80
+      ),
+
+    auth: {
+
+      username:
+        decodeURIComponent(
+          parsed.username
+        ),
+
+      password:
+        decodeURIComponent(
+          parsed.password
+        ),
+    },
+  };
+}
+
+
+/**
+ * ======================================================
+ * VK API REQUEST
+ * ======================================================
+ */
+
+async function vkApi(
+  method,
+  params = {}
+) {
+
+  if (!vkAccessToken) {
+
+    throw new Error(
+      "VK User Access Token is missing"
+    );
+  }
+
+
+  const form =
+    new URLSearchParams();
+
+
+  for (
+    const [key, value]
+    of Object.entries(params)
+  ) {
+
+    if (
+      value !== undefined &&
+      value !== null
+    ) {
+
+      form.append(
+        key,
+        String(value)
+      );
+    }
+  }
+
+
+  form.append(
+    "access_token",
+    vkAccessToken
+  );
+
+  form.append(
+    "v",
+    VK_API_VERSION
+  );
+
+
+  const response =
+    await axios.post(
+
+      `https://api.vk.com/method/${method}`,
+
+      form.toString(),
+
+      {
+        headers: {
+
+          "Content-Type":
+            "application/x-www-form-urlencoded",
+        },
+
+        proxy:
+          getVkProxy(),
+
+        timeout:
+          30000,
+      }
+    );
+
+
+  if (
+    response.data &&
+    response.data.error
+  ) {
+
+    const vkError =
+      response.data.error;
+
+    const error =
+      new Error(
+        `VK ${method}: ${vkError.error_msg}`
+      );
+
+    error.vkError =
+      vkError;
+
+    throw error;
+  }
+
+
+  return response.data.response;
+}
+
+
+/**
+ * ======================================================
+ * ERROR RESPONSE
+ * ======================================================
+ */
+
+function sendVkError(
+  res,
+  error
+) {
+
+  console.error(
+    "VK ERROR:",
+    error.response?.data ||
+    error.vkError ||
+    error.message
+  );
+
+
+  return res
+    .status(500)
+    .json({
+
+      success:
+        false,
+
+      error:
+        error.message,
+
+      vk_error:
+        error.vkError ||
+        error.response?.data ||
+        null,
+    });
+} 
 /**
  * Хранилище webhook-событий.
  *
@@ -99,7 +329,576 @@ app.get("/vk-auth", (req, res) => {
     path.join(__dirname, "public", "vk-auth.html")
   );
 });
+/**
+ * ======================================================
+ * VK ID:
+ * code -> User Access Token
+ *
+ * ВАЖНО:
+ * запрос идёт через Fixie.
+ * Значит токен выдаётся на наш
+ * фиксированный IP.
+ * ======================================================
+ */
 
+app.post(
+  "/vk/token",
+
+  async function (req, res) {
+
+    const {
+      code,
+      device_id,
+      code_verifier,
+      state,
+    } = req.body || {};
+
+
+    if (
+      !code ||
+      !device_id ||
+      !code_verifier ||
+      !state
+    ) {
+
+      return res
+        .status(400)
+        .json({
+
+          success:
+            false,
+
+          error:
+            "code, device_id, code_verifier and state are required",
+        });
+    }
+
+
+    try {
+
+      const query =
+        new URLSearchParams({
+
+          grant_type:
+            "authorization_code",
+
+          redirect_uri:
+            VK_REDIRECT_URI,
+
+          client_id:
+            String(VK_APP_ID),
+
+          code_verifier:
+            String(code_verifier),
+
+          state:
+            String(state),
+
+          device_id:
+            String(device_id),
+        });
+
+
+      const body =
+        new URLSearchParams({
+
+          code:
+            String(code),
+        });
+
+
+      const response =
+        await axios.post(
+
+          `https://id.vk.ru/oauth2/auth?${query.toString()}`,
+
+          body.toString(),
+
+          {
+            headers: {
+
+              "Content-Type":
+                "application/x-www-form-urlencoded",
+            },
+
+            proxy:
+              getVkProxy(),
+
+            timeout:
+              30000,
+          }
+        );
+
+
+      const data =
+        response.data;
+
+
+      if (data.error) {
+
+        return res
+          .status(400)
+          .json({
+
+            success:
+              false,
+
+            vk:
+              data,
+          });
+      }
+
+
+      if (
+        data.state &&
+        data.state !== state
+      ) {
+
+        return res
+          .status(403)
+          .json({
+
+            success:
+              false,
+
+            error:
+              "VK OAuth state mismatch",
+          });
+      }
+
+
+      /**
+       * Сохраняем в памяти Heroku.
+       */
+      vkAccessToken =
+        data.access_token;
+
+      vkRefreshToken =
+        data.refresh_token ||
+        null;
+
+      vkDeviceId =
+        String(device_id);
+
+
+      console.log(
+        "VK USER TOKEN RECEIVED",
+        {
+          user_id:
+            data.user_id,
+
+          expires_in:
+            data.expires_in,
+
+          scope:
+            data.scope,
+        }
+      );
+
+
+      /**
+       * Показываем токен только после
+       * успешной авторизации.
+       *
+       * Потом перенесём его в Config Vars.
+       */
+      return res.json({
+
+        success:
+          true,
+
+        access_token:
+          data.access_token,
+
+        refresh_token:
+          data.refresh_token,
+
+        user_id:
+          data.user_id,
+
+        expires_in:
+          data.expires_in,
+
+        scope:
+          data.scope,
+
+        device_id:
+          device_id,
+
+        message:
+          "VK User Token получен через Fixie",
+      });
+
+
+    } catch (error) {
+
+      return sendVkError(
+        res,
+        error
+      );
+    }
+  }
+);
+/**
+ * ======================================================
+ * VK POST WITH PHOTO
+ *
+ * Make отправляет:
+ *
+ * {
+ *   "image_url": "...",
+ *   "caption": "..."
+ * }
+ * ======================================================
+ */
+
+app.post(
+  "/vk/post",
+
+  async function (req, res) {
+
+    /**
+     * Защищаем endpoint от чужих запросов.
+     */
+    const receivedSecret =
+      req.get(
+        "X-VK-Post-Secret"
+      );
+
+
+    if (
+      !VK_POST_SECRET ||
+      receivedSecret !==
+        VK_POST_SECRET
+    ) {
+
+      return res
+        .status(401)
+        .json({
+
+          success:
+            false,
+
+          error:
+            "Unauthorized",
+        });
+    }
+
+
+    const {
+      image_url,
+      caption,
+    } = req.body || {};
+
+
+    if (!image_url) {
+
+      return res
+        .status(400)
+        .json({
+
+          success:
+            false,
+
+          error:
+            "image_url is required",
+        });
+    }
+
+
+    try {
+
+      /**
+       * ==========================================
+       * STEP 1
+       *
+       * Получаем upload_url.
+       *
+       * Этот запрос идёт через Fixie.
+       * ==========================================
+       */
+
+      const uploadServer =
+        await vkApi(
+
+          "photos.getWallUploadServer",
+
+          {
+            group_id:
+              VK_GROUP_ID,
+          }
+        );
+
+
+      if (
+        !uploadServer ||
+        !uploadServer.upload_url
+      ) {
+
+        throw new Error(
+          "VK did not return upload_url"
+        );
+      }
+
+
+      /**
+       * ==========================================
+       * STEP 2
+       *
+       * Скачиваем картинку из Google Sheets URL.
+       *
+       * Через Fixie её НЕ качаем,
+       * чтобы не расходовать Fixie traffic.
+       * ==========================================
+       */
+
+      const imageResponse =
+        await axios.get(
+
+          image_url,
+
+          {
+            responseType:
+              "arraybuffer",
+
+            timeout:
+              30000,
+
+            maxContentLength:
+              20 * 1024 * 1024,
+          }
+        );
+
+
+      const imageBuffer =
+        Buffer.from(
+          imageResponse.data
+        );
+
+
+      const contentType =
+        imageResponse.headers[
+          "content-type"
+        ] ||
+        "image/jpeg";
+
+
+      let extension =
+        "jpg";
+
+
+      if (
+        contentType.includes(
+          "png"
+        )
+      ) {
+
+        extension =
+          "png";
+
+      } else if (
+        contentType.includes(
+          "webp"
+        )
+      ) {
+
+        extension =
+          "webp";
+      }
+
+
+      /**
+       * Node 22 имеет встроенные
+       * FormData и Blob.
+       */
+      const uploadForm =
+        new FormData();
+
+
+      uploadForm.append(
+
+        "photo",
+
+        new Blob(
+          [imageBuffer],
+          {
+            type:
+              contentType,
+          }
+        ),
+
+        `photo.${extension}`
+      );
+
+
+      /**
+       * ==========================================
+       * STEP 3
+       *
+       * Загружаем бинарный файл
+       * на upload_url VK.
+       * ==========================================
+       */
+
+      const uploaded =
+        await axios.post(
+
+          uploadServer.upload_url,
+
+          uploadForm,
+
+          {
+            timeout:
+              60000,
+
+            maxBodyLength:
+              Infinity,
+
+            maxContentLength:
+              Infinity,
+          }
+        );
+
+
+      let uploadData =
+        uploaded.data;
+
+
+      if (
+        typeof uploadData ===
+        "string"
+      ) {
+
+        uploadData =
+          JSON.parse(
+            uploadData
+          );
+      }
+
+
+      if (
+        !uploadData.server ||
+        !uploadData.photo ||
+        !uploadData.hash
+      ) {
+
+        throw new Error(
+          "Invalid response from VK upload server"
+        );
+      }
+
+
+      /**
+       * ==========================================
+       * STEP 4
+       *
+       * Сохраняем фото.
+       *
+       * Снова через Fixie.
+       * ==========================================
+       */
+
+      const savedPhotos =
+        await vkApi(
+
+          "photos.saveWallPhoto",
+
+          {
+            group_id:
+              VK_GROUP_ID,
+
+            server:
+              uploadData.server,
+
+            photo:
+              typeof uploadData.photo ===
+              "string"
+                ? uploadData.photo
+                : JSON.stringify(
+                    uploadData.photo
+                  ),
+
+            hash:
+              uploadData.hash,
+          }
+        );
+
+
+      if (
+        !Array.isArray(
+          savedPhotos
+        ) ||
+        !savedPhotos[0]
+      ) {
+
+        throw new Error(
+          "VK did not save photo"
+        );
+      }
+
+
+      const photo =
+        savedPhotos[0];
+
+
+      const attachment =
+        `photo${photo.owner_id}_${photo.id}`;
+
+
+      /**
+       * ==========================================
+       * STEP 5
+       *
+       * Публикуем на стене.
+       * ==========================================
+       */
+
+      const post =
+        await vkApi(
+
+          "wall.post",
+
+          {
+            owner_id:
+              `-${VK_GROUP_ID}`,
+
+            from_group:
+              1,
+
+            message:
+              caption || "",
+
+            attachments:
+              attachment,
+          }
+        );
+
+
+      return res.json({
+
+        success:
+          true,
+
+        post_id:
+          post.post_id,
+
+        attachment:
+          attachment,
+
+        group_id:
+          VK_GROUP_ID,
+      });
+
+
+    } catch (error) {
+
+      return sendVkError(
+        res,
+        error
+      );
+    }
+  }
+);
 /**
  * ======================================================
  * HELPERS
