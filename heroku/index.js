@@ -1195,8 +1195,8 @@ app.get(
         redirect_uri:
           VK_REDIRECT_URI,
 
-        scope:
-          "photos,wall,groups,offline",
+      scope:
+  "wall,groups",
 
         response_type:
           "code",
