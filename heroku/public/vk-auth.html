@@ -2,451 +2,204 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
-  >
-
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>VK ID — Enzhi Crew</title>
-
   <style>
-    * {
-      box-sizing: border-box;
-    }
-
+    * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
-
       display: flex;
       align-items: center;
       justify-content: center;
-
       font-family: Arial, sans-serif;
-
       background: #f5f5f5;
     }
-
     .card {
       width: 100%;
       max-width: 440px;
-
       padding: 32px;
-
       background: white;
-
       border-radius: 16px;
-
-      box-shadow:
-        0 4px 20px rgba(0, 0, 0, 0.08);
+      box-shadow: 0 4px 20px rgba(0,0,0,.08);
     }
-
-    h1 {
-      margin-top: 0;
-
-      text-align: center;
-
-      font-size: 26px;
-    }
-
-    .description {
-      text-align: center;
-
-      color: #666;
-
-      margin-bottom: 25px;
-    }
-
-    #VkIdSdkOneTap {
-      display: flex;
-
-      justify-content: center;
-
-      min-height: 44px;
-    }
-
+    h1 { margin-top: 0; text-align: center; font-size: 26px; }
+    .description { text-align: center; color: #666; margin-bottom: 25px; }
+    #VkIdSdkOneTap { display: flex; justify-content: center; min-height: 44px; }
     #status {
       margin-top: 20px;
-
       padding: 12px;
-
       border-radius: 8px;
-
       background: #f3f3f3;
-
       font-size: 14px;
-
       white-space: pre-wrap;
-
       overflow-wrap: anywhere;
     }
-
-    #tokenBlock {
-      display: none;
-
-      margin-top: 20px;
-    }
-
+    #tokenBlock { display: none; margin-top: 20px; }
     textarea {
       width: 100%;
-
       min-height: 120px;
-
       padding: 10px;
-
       border: 1px solid #ccc;
-
       border-radius: 8px;
-
       resize: vertical;
     }
-
-    label {
-      display: block;
-
-      margin-top: 15px;
-      margin-bottom: 5px;
-
-      font-weight: bold;
-    }
-
-    .warning {
-      margin-top: 20px;
-
-      font-size: 13px;
-
-      color: #777;
-    }
+    label { display: block; margin-top: 15px; margin-bottom: 5px; font-weight: bold; }
+    .warning { margin-top: 20px; font-size: 13px; color: #777; }
   </style>
-
-
-  <!-- VK ID SDK -->
-  <script
-    src="https://unpkg.com/@vkid/sdk@2.6.1/dist-sdk/umd/index.js"
-  ></script>
-
+  <script src="https://unpkg.com/@vkid/sdk@2.6.1/dist-sdk/umd/index.js"></script>
 </head>
-
-
 <body>
-
   <div class="card">
-
     <h1>Вход через VK ID</h1>
-
-    <div class="description">
-      Авторизация Enzhi Crew
-    </div>
-
-
-    <!-- Здесь появится кнопка VK -->
+    <div class="description">Авторизация Enzhi Crew</div>
     <div id="VkIdSdkOneTap"></div>
-
-
-    <div id="status">
-      Инициализация VK ID...
-    </div>
-
-
+    <div id="status">Инициализация VK ID...</div>
     <div id="tokenBlock">
-
-      <label for="accessToken">
-        Access Token
-      </label>
-
-      <textarea
-        id="accessToken"
-        readonly
-      ></textarea>
-
-
-      <label for="refreshToken">
-        Refresh Token
-      </label>
-
-      <textarea
-        id="refreshToken"
-        readonly
-      ></textarea>
-
-
-      <label for="userId">
-        User ID
-      </label>
-
-      <textarea
-        id="userId"
-        readonly
-        style="min-height: 50px;"
-      ></textarea>
-
+      <label for="accessToken">Access Token</label>
+      <textarea id="accessToken" readonly></textarea>
+      <label for="refreshToken">Refresh Token</label>
+      <textarea id="refreshToken" readonly></textarea>
+      <label for="userId">User ID</label>
+      <textarea id="userId" readonly style="min-height:50px"></textarea>
     </div>
-
-
-    <div class="warning">
-      Не передавайте Access Token другим людям.
-    </div>
-
+    <div class="warning">Не передавайте Access Token другим людям.</div>
   </div>
 
-
-
   <script>
-
-    const statusElement =
-      document.getElementById("status");
-
-    const tokenBlock =
-      document.getElementById("tokenBlock");
-
-    const accessTokenElement =
-      document.getElementById("accessToken");
-
-    const refreshTokenElement =
-      document.getElementById("refreshToken");
-
-    const userIdElement =
-      document.getElementById("userId");
-
+    const statusElement = document.getElementById("status");
+    const tokenBlock = document.getElementById("tokenBlock");
+    const accessTokenElement = document.getElementById("accessToken");
+    const refreshTokenElement = document.getElementById("refreshToken");
+    const userIdElement = document.getElementById("userId");
 
     function setStatus(message) {
-
-      statusElement.textContent =
-        message;
+      statusElement.textContent = message;
     }
-
 
     function showTokens(data) {
-
-      tokenBlock.style.display =
-        "block";
-
-
-      accessTokenElement.value =
-        data.access_token || "";
-
-
-      refreshTokenElement.value =
-        data.refresh_token || "";
-
-
-      userIdElement.value =
-        data.user_id ||
-        data.userId ||
-        "";
+      tokenBlock.style.display = "block";
+      accessTokenElement.value = data.access_token || "";
+      refreshTokenElement.value = data.refresh_token || "";
+      userIdElement.value = data.user_id || data.userId || "";
     }
-
-
-
-    function vkidOnSuccess(data) {
-
-      console.log(
-        "VK ID SUCCESS:",
-        data
-      );
-
-
-      showTokens(data);
-
-
-      setStatus(
-        "Авторизация успешно завершена."
-      );
-    }
-
-
 
     function vkidOnError(error) {
-
-      console.error(
-        "VK ID ERROR:",
-        error
-      );
-
-
-      let errorText =
-        "Ошибка VK ID";
-
-
+      console.error("VK ID ERROR:", error);
+      let text = "Ошибка VK ID";
       try {
-
-        errorText +=
-          "\n\n" +
-          JSON.stringify(
-            error,
-            null,
-            2
-          );
-
-      } catch (e) {
-
-        errorText +=
-          "\n\n" +
-          String(error);
+        text += "\n\n" + JSON.stringify(error, null, 2);
+      } catch (_) {
+        text += "\n\n" + String(error);
       }
-
-
-      setStatus(
-        errorText
-      );
+      setStatus(text);
     }
 
+    function randomBase64Url(length) {
+      const bytes = new Uint8Array(length);
+      window.crypto.getRandomValues(bytes);
+      let binary = "";
+      bytes.forEach(byte => binary += String.fromCharCode(byte));
+      return btoa(binary)
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/g, "");
+    }
 
+    async function createCodeChallenge(codeVerifier) {
+      const encoded = new TextEncoder().encode(codeVerifier);
+      const digest = await window.crypto.subtle.digest("SHA-256", encoded);
+      const bytes = new Uint8Array(digest);
+      let binary = "";
+      bytes.forEach(byte => binary += String.fromCharCode(byte));
+      return btoa(binary)
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/g, "");
+    }
 
-    if (!("VKIDSDK" in window)) {
+    async function initVkId() {
+      if (!("VKIDSDK" in window)) {
+        setStatus("Ошибка: библиотека VK ID SDK не загрузилась.");
+        return;
+      }
 
-      setStatus(
-        "Ошибка: библиотека VK ID SDK не загрузилась."
-      );
-
-    } else {
-
-      const VKID =
-        window.VKIDSDK;
-
+      const VKID = window.VKIDSDK;
 
       try {
-
-        /*
-         * ===============================
-         * НАСТРОЙКИ VK ID
-         * ===============================
-         */
+        const codeVerifier = randomBase64Url(64);
+        const codeChallenge = await createCodeChallenge(codeVerifier);
+        const oauthState = randomBase64Url(24);
 
         VKID.Config.init({
-
           app: 54695788,
-
-          redirectUrl:
-            "https://auth.enzhicrew.ru/vk-auth",
-
-          responseMode:
-            VKID.ConfigResponseMode.Callback,
-
-          source:
-            VKID.ConfigSource.LOWCODE,
-
-          scope: ""
-
+          redirectUrl: "https://auth.enzhicrew.ru/vk-auth",
+          responseMode: VKID.ConfigResponseMode.Callback,
+          source: VKID.ConfigSource.LOWCODE,
+          state: oauthState,
+          codeChallenge: codeChallenge,
+          scope: "wall groups"
         });
 
-
-
-        /*
-         * ===============================
-         * КНОПКА ONE TAP
-         * ===============================
-         */
-
-        const oneTap =
-          new VKID.OneTap();
-
-
-        const container =
-          document.getElementById(
-            "VkIdSdkOneTap"
-          );
-
+        const oneTap = new VKID.OneTap();
+        const container = document.getElementById("VkIdSdkOneTap");
 
         oneTap
           .render({
-
-            container:
-              container,
-
-            showAlternativeLogin:
-              true
-
+            container: container,
+            showAlternativeLogin: true
           })
+          .on(VKID.WidgetEvents.ERROR, vkidOnError)
+          .on(VKID.OneTapInternalEvents.LOGIN_SUCCESS, async function(payload) {
+            const code = payload && payload.code;
+            const deviceId = payload && payload.device_id;
 
-          .on(
-            VKID.WidgetEvents.ERROR,
-            vkidOnError
-          )
+            if (!code || !deviceId) {
+              vkidOnError({ message: "VK не вернул code или device_id", payload });
+              return;
+            }
 
-          .on(
-            VKID.OneTapInternalEvents.LOGIN_SUCCESS,
+            setStatus("VK авторизация пройдена. Получаем User Token...");
 
-            function(payload) {
+            try {
+              const response = await fetch("/vk/token", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  code: code,
+                  device_id: deviceId,
+                  code_verifier: codeVerifier,
+                  state: oauthState
+                })
+              });
 
-              console.log(
-                "LOGIN_SUCCESS:",
-                payload
-              );
+              const responseText = await response.text();
+              let data;
 
-
-              const code =
-                payload.code;
-
-
-              const deviceId =
-                payload.device_id;
-
-
-              if (
-                !code ||
-                !deviceId
-              ) {
-
-                vkidOnError({
-
-                  message:
-                    "VK не вернул code или device_id",
-
-                  payload:
-                    payload
-
-                });
-
-
-                return;
+              try {
+                data = JSON.parse(responseText);
+              } catch (_) {
+                throw new Error("Сервер вернул не JSON:\n" + responseText);
               }
 
+              if (!response.ok || !data.success) {
+                throw data;
+              }
 
-              setStatus(
-                "Авторизация пройдена. Получаем токен..."
-              );
-
-
-              /*
-               * Обмениваем code
-               * на access_token
-               */
-
-              VKID.Auth
-                .exchangeCode(
-                  code,
-                  deviceId
-                )
-
-                .then(
-                  vkidOnSuccess
-                )
-
-                .catch(
-                  vkidOnError
-                );
-
+              showTokens(data);
+              setStatus("Авторизация успешно завершена. User Token получен.");
+            } catch (error) {
+              vkidOnError(error);
             }
-          );
+          });
 
-
-        setStatus(
-          "VK ID загружен. Нажмите кнопку входа."
-        );
-
-
+        setStatus("VK ID загружен. Нажмите кнопку входа.");
       } catch (error) {
-
-        vkidOnError(
-          error
-        );
+        vkidOnError(error);
       }
-
     }
 
+    initVkId();
   </script>
-
 </body>
 </html>
