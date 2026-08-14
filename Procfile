@@ -1,1 +1,1 @@
-web: node heroku/index.js
+web: node -r ./heroku/vk-auth-preload.js heroku/index.js
