@@ -6,46 +6,16 @@
   <title>VK ID — Enzhi Crew</title>
   <style>
     * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: Arial, sans-serif;
-      background: #f5f5f5;
-    }
-    .card {
-      width: 100%;
-      max-width: 440px;
-      padding: 32px;
-      background: white;
-      border-radius: 16px;
-      box-shadow: 0 4px 20px rgba(0,0,0,.08);
-    }
-    h1 { margin-top: 0; text-align: center; font-size: 26px; }
-    .description { text-align: center; color: #666; margin-bottom: 25px; }
-    #VkIdSdkOneTap { display: flex; justify-content: center; min-height: 44px; }
-    #status {
-      margin-top: 20px;
-      padding: 12px;
-      border-radius: 8px;
-      background: #f3f3f3;
-      font-size: 14px;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-    }
-    #tokenBlock { display: none; margin-top: 20px; }
-    textarea {
-      width: 100%;
-      min-height: 120px;
-      padding: 10px;
-      border: 1px solid #ccc;
-      border-radius: 8px;
-      resize: vertical;
-    }
-    label { display: block; margin-top: 15px; margin-bottom: 5px; font-weight: bold; }
-    .warning { margin-top: 20px; font-size: 13px; color: #777; }
+    body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; font-family:Arial,sans-serif; background:#f5f5f5; }
+    .card { width:100%; max-width:440px; padding:32px; background:#fff; border-radius:16px; box-shadow:0 4px 20px rgba(0,0,0,.08); }
+    h1 { margin-top:0; text-align:center; font-size:26px; }
+    .description { text-align:center; color:#666; margin-bottom:25px; }
+    #VkIdSdkOneTap { display:flex; justify-content:center; min-height:44px; }
+    #status { margin-top:20px; padding:12px; border-radius:8px; background:#f3f3f3; font-size:14px; white-space:pre-wrap; overflow-wrap:anywhere; }
+    #tokenBlock { display:none; margin-top:20px; }
+    textarea { width:100%; min-height:120px; padding:10px; border:1px solid #ccc; border-radius:8px; resize:vertical; }
+    label { display:block; margin-top:15px; margin-bottom:5px; font-weight:bold; }
+    .warning { margin-top:20px; font-size:13px; color:#777; }
   </style>
   <script src="https://unpkg.com/@vkid/sdk@2.6.1/dist-sdk/umd/index.js"></script>
 </head>
@@ -73,9 +43,7 @@
     const refreshTokenElement = document.getElementById("refreshToken");
     const userIdElement = document.getElementById("userId");
 
-    function setStatus(message) {
-      statusElement.textContent = message;
-    }
+    function setStatus(message) { statusElement.textContent = message; }
 
     function showTokens(data) {
       tokenBlock.style.display = "block";
@@ -87,11 +55,8 @@
     function vkidOnError(error) {
       console.error("VK ID ERROR:", error);
       let text = "Ошибка VK ID";
-      try {
-        text += "\n\n" + JSON.stringify(error, null, 2);
-      } catch (_) {
-        text += "\n\n" + String(error);
-      }
+      try { text += "\n\n" + JSON.stringify(error, null, 2); }
+      catch (_) { text += "\n\n" + String(error); }
       setStatus(text);
     }
 
@@ -100,22 +65,7 @@
       window.crypto.getRandomValues(bytes);
       let binary = "";
       bytes.forEach(byte => binary += String.fromCharCode(byte));
-      return btoa(binary)
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/g, "");
-    }
-
-    async function createCodeChallenge(codeVerifier) {
-      const encoded = new TextEncoder().encode(codeVerifier);
-      const digest = await window.crypto.subtle.digest("SHA-256", encoded);
-      const bytes = new Uint8Array(digest);
-      let binary = "";
-      bytes.forEach(byte => binary += String.fromCharCode(byte));
-      return btoa(binary)
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/g, "");
+      return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
     }
 
     async function initVkId() {
@@ -128,34 +78,29 @@
 
       try {
         const codeVerifier = randomBase64Url(64);
-        const codeChallenge = await createCodeChallenge(codeVerifier);
         const oauthState = randomBase64Url(24);
 
         VKID.Config.init({
           app: 54695788,
           redirectUrl: "https://auth.enzhicrew.ru/vk-auth",
           responseMode: VKID.ConfigResponseMode.Callback,
-          source: VKID.ConfigSource.LOWCODE,
           state: oauthState,
-          codeChallenge: codeChallenge,
-          scope: "wall groups"
+          codeVerifier: codeVerifier,
+          scope: ""
         });
 
         const oneTap = new VKID.OneTap();
         const container = document.getElementById("VkIdSdkOneTap");
 
         oneTap
-          .render({
-            container: container,
-            showAlternativeLogin: true
-          })
+          .render({ container: container, showAlternativeLogin: true })
           .on(VKID.WidgetEvents.ERROR, vkidOnError)
           .on(VKID.OneTapInternalEvents.LOGIN_SUCCESS, async function(payload) {
             const code = payload && payload.code;
             const deviceId = payload && payload.device_id;
 
             if (!code || !deviceId) {
-              vkidOnError({ message: "VK не вернул code или device_id", payload });
+              vkidOnError({ message: "VK не вернул code или device_id", payload: payload });
               return;
             }
 
@@ -175,16 +120,10 @@
 
               const responseText = await response.text();
               let data;
+              try { data = JSON.parse(responseText); }
+              catch (_) { throw new Error("Сервер вернул не JSON:\n" + responseText); }
 
-              try {
-                data = JSON.parse(responseText);
-              } catch (_) {
-                throw new Error("Сервер вернул не JSON:\n" + responseText);
-              }
-
-              if (!response.ok || !data.success) {
-                throw data;
-              }
+              if (!response.ok || !data.success) throw data;
 
               showTokens(data);
               setStatus("Авторизация успешно завершена. User Token получен.");
