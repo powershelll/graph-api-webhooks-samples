@@ -1,7 +1,6 @@
 /**
  * Enzhi Crew Automation
  * Instagram -> Heroku -> Make
- * VK -> Heroku -> Fixie -> VK API
  */
 
 const express = require("express");
@@ -10,15 +9,19 @@ const axios = require("axios");
 const crypto = require("crypto");
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+
+const PORT =
+  process.env.PORT || 5000;
+
 
 /**
  * ======================================================
- * COMMON / INSTAGRAM CONFIG
+ * CONFIG
  * ======================================================
  */
 
-const APP_SECRET = process.env.APP_SECRET || null;
+const APP_SECRET =
+  process.env.APP_SECRET || null;
 
 const VERIFY_TOKEN =
   process.env.WEBHOOK_VERIFY_TOKEN ||
@@ -56,66 +59,11 @@ const INSTAGRAM_API_VERSION =
 
 
 /**
- * ======================================================
- * VK CONFIG — CLASSIC VK API OAUTH
- * ======================================================
+ * Хранилище webhook-событий.
  *
- * Heroku Config Vars:
- *
- * VK_APP_ID
- * VK_CLIENT_SECRET
- * VK_REDIRECT_URI=https://auth.enzhicrew.ru/vk/callback
- * VK_GROUP_ID=197890975
- * VK_FIXIE_URL=http://fixie:PASSWORD@ONE_STATIC_IP:80
- * VK_POST_SECRET=...
- *
- * После первой успешной авторизации:
- *
- * VK_ACCESS_TOKEN=...
+ * Для демонстрации App Review
+ * храним данные в памяти Heroku.
  */
-
-const VK_APP_ID =
-  process.env.VK_APP_ID ||
-  null;
-
-const VK_CLIENT_SECRET =
-  process.env.VK_CLIENT_SECRET ||
-  null;
-
-const VK_GROUP_ID =
-  String(
-    process.env.VK_GROUP_ID ||
-    "197890975"
-  ).replace(/^-/, "");
-
-const VK_REDIRECT_URI =
-  process.env.VK_REDIRECT_URI ||
-  "https://auth.enzhicrew.ru/vk/callback";
-
-const VK_API_VERSION =
-  "5.199";
-
-const VK_POST_SECRET =
-  process.env.VK_POST_SECRET ||
-  null;
-
-const VK_STATE_SECRET =
-  process.env.VK_OAUTH_STATE_SECRET ||
-  VK_CLIENT_SECRET ||
-  OAUTH_STATE_SECRET ||
-  null;
-
-let vkAccessToken =
-  process.env.VK_ACCESS_TOKEN ||
-  null;
-
-
-/**
- * ======================================================
- * IN-MEMORY STORAGE
- * ======================================================
- */
-
 let receivedUpdates = [];
 
 let sentMessages = [];
@@ -129,12 +77,7 @@ let sentMessages = [];
 
 app.use(
   bodyParser.json({
-    verify: function (
-      req,
-      res,
-      buf
-    ) {
-
+    verify: function (req, res, buf) {
       req.rawBody =
         Buffer.from(buf);
     },
@@ -176,39 +119,266 @@ function toBase64Url(value) {
 }
 
 
-function rememberUpdate(body) {
+/**
+ * ======================================================
+ * INSTAGRAM MESSAGE PARSER
+ * ======================================================
+ */
 
-  receivedUpdates.unshift(
-    body
-  );
+function getRecentInstagramMessages() {
+
+  const messages = [];
+
+  const seen =
+    new Set();
 
 
-  if (
-    receivedUpdates.length >
-    100
-  ) {
+  function addMessage(data) {
 
-    receivedUpdates =
-      receivedUpdates.slice(
-        0,
-        100
+    if (!data) {
+      return;
+    }
+
+
+    const text =
+      typeof data.text === "string"
+        ? data.text.trim()
+        : "";
+
+
+    if (!text) {
+      return;
+    }
+
+
+    const messageId =
+      String(
+        data.messageId || ""
       );
+
+
+    /**
+     * Удаляем дубли.
+     */
+    if (
+      messageId &&
+      seen.has(messageId)
+    ) {
+      return;
+    }
+
+
+    if (messageId) {
+      seen.add(messageId);
+    }
+
+
+    let timestamp =
+      Number(
+        data.timestamp || 0
+      );
+
+
+    /**
+     * Meta иногда присылает timestamp
+     * в секундах,
+     * иногда в миллисекундах.
+     */
+    if (
+      timestamp > 0 &&
+      timestamp < 100000000000
+    ) {
+
+      timestamp =
+        timestamp * 1000;
+    }
+
+
+    messages.push({
+
+      senderId:
+        String(
+          data.senderId || ""
+        ),
+
+      recipientId:
+        String(
+          data.recipientId || ""
+        ),
+
+      text:
+        text,
+
+      timestamp:
+        timestamp,
+
+      messageId:
+        messageId,
+    });
   }
 
 
-  console.log(
-    "Webhook stored in memory",
-    {
-      totalUpdates:
-        receivedUpdates.length,
+  for (
+    const update
+    of receivedUpdates
+  ) {
+
+    if (
+      !update ||
+      update.object !== "instagram"
+    ) {
+      continue;
     }
+
+
+    const entries =
+      Array.isArray(update.entry)
+        ? update.entry
+        : [];
+
+
+    for (
+      const entry
+      of entries
+    ) {
+
+
+      /**
+       * ==========================================
+       * FORMAT 1
+       * Реальный Instagram webhook
+       *
+       * entry.messaging[]
+       * ==========================================
+       */
+
+      const messagingEvents =
+        Array.isArray(entry.messaging)
+          ? entry.messaging
+          : [];
+
+
+      for (
+        const event
+        of messagingEvents
+      ) {
+
+        if (!event.message) {
+          continue;
+        }
+
+
+        /**
+         * Не показываем echo
+         * наших исходящих сообщений.
+         */
+        if (
+          event.message.is_echo
+        ) {
+          continue;
+        }
+
+
+        addMessage({
+
+          senderId:
+            event.sender?.id,
+
+          recipientId:
+            event.recipient?.id,
+
+          text:
+            event.message?.text,
+
+          timestamp:
+            event.timestamp,
+
+          messageId:
+            event.message?.mid,
+        });
+      }
+
+
+      /**
+       * ==========================================
+       * FORMAT 2
+       * Тестовый webhook Meta
+       *
+       * entry.changes[].value
+       * ==========================================
+       */
+
+      const changes =
+        Array.isArray(entry.changes)
+          ? entry.changes
+          : [];
+
+
+      for (
+        const change
+        of changes
+      ) {
+
+        if (
+          change.field !==
+          "messages"
+        ) {
+          continue;
+        }
+
+
+        const value =
+          change.value || {};
+
+
+        if (!value.message) {
+          continue;
+        }
+
+
+        addMessage({
+
+          senderId:
+            value.sender?.id,
+
+          recipientId:
+            value.recipient?.id,
+
+          text:
+            value.message?.text,
+
+          timestamp:
+            value.timestamp,
+
+          messageId:
+            value.message?.mid,
+        });
+      }
+    }
+  }
+
+
+  messages.sort(
+    function (a, b) {
+
+      return (
+        b.timestamp -
+        a.timestamp
+      );
+    }
+  );
+
+
+  return messages.slice(
+    0,
+    30
   );
 }
 
 
 /**
  * ======================================================
- * INSTAGRAM OAUTH STATE
+ * OAUTH STATE
  * ======================================================
  */
 
@@ -258,7 +428,6 @@ function validateOAuthState(state) {
     !state ||
     !OAUTH_STATE_SECRET
   ) {
-
     return false;
   }
 
@@ -270,7 +439,6 @@ function validateOAuthState(state) {
   if (
     parts.length !== 3
   ) {
-
     return false;
   }
 
@@ -280,11 +448,8 @@ function validateOAuthState(state) {
 
 
   if (
-    !Number.isFinite(
-      timestamp
-    )
+    !Number.isFinite(timestamp)
   ) {
-
     return false;
   }
 
@@ -294,6 +459,10 @@ function validateOAuthState(state) {
     timestamp;
 
 
+  /**
+   * OAuth state действителен
+   * 10 минут.
+   */
   if (
     stateAge < 0 ||
     stateAge >
@@ -391,9 +560,7 @@ function verifyMetaSignature(req) {
 
 
   let receivedSignature;
-
   let algorithm;
-
   let prefix;
 
 
@@ -472,1634 +639,38 @@ function verifyMetaSignature(req) {
 
 /**
  * ======================================================
- * INSTAGRAM MESSAGE PARSER
+ * STORE WEBHOOK
  * ======================================================
  */
 
-function getRecentInstagramMessages() {
+function rememberUpdate(body) {
 
-  const messages = [];
-
-  const seen =
-    new Set();
-
-
-  function addMessage(data) {
-
-    if (!data) {
-
-      return;
-    }
-
-
-    const text =
-      typeof data.text ===
-      "string"
-
-        ? data.text.trim()
-
-        : "";
-
-
-    if (!text) {
-
-      return;
-    }
-
-
-    const messageId =
-      String(
-        data.messageId ||
-        ""
-      );
-
-
-    if (
-      messageId &&
-      seen.has(
-        messageId
-      )
-    ) {
-
-      return;
-    }
-
-
-    if (messageId) {
-
-      seen.add(
-        messageId
-      );
-    }
-
-
-    let timestamp =
-      Number(
-        data.timestamp ||
-        0
-      );
-
-
-    if (
-      timestamp > 0 &&
-      timestamp <
-        100000000000
-    ) {
-
-      timestamp *=
-        1000;
-    }
-
-
-    messages.push({
-
-      senderId:
-        String(
-          data.senderId ||
-          ""
-        ),
-
-      recipientId:
-        String(
-          data.recipientId ||
-          ""
-        ),
-
-      text:
-        text,
-
-      timestamp:
-        timestamp,
-
-      messageId:
-        messageId,
-    });
-  }
-
-
-  for (
-    const update
-    of receivedUpdates
-  ) {
-
-    if (
-      !update ||
-      update.object !==
-        "instagram"
-    ) {
-
-      continue;
-    }
-
-
-    const entries =
-      Array.isArray(
-        update.entry
-      )
-
-        ? update.entry
-
-        : [];
-
-
-    for (
-      const entry
-      of entries
-    ) {
-
-      const messagingEvents =
-        Array.isArray(
-          entry.messaging
-        )
-
-          ? entry.messaging
-
-          : [];
-
-
-      for (
-        const event
-        of messagingEvents
-      ) {
-
-        if (
-          !event.message ||
-          event.message.is_echo
-        ) {
-
-          continue;
-        }
-
-
-        addMessage({
-
-          senderId:
-            event.sender?.id,
-
-          recipientId:
-            event.recipient?.id,
-
-          text:
-            event.message?.text,
-
-          timestamp:
-            event.timestamp,
-
-          messageId:
-            event.message?.mid,
-        });
-      }
-
-
-      const changes =
-        Array.isArray(
-          entry.changes
-        )
-
-          ? entry.changes
-
-          : [];
-
-
-      for (
-        const change
-        of changes
-      ) {
-
-        if (
-          change.field !==
-          "messages"
-        ) {
-
-          continue;
-        }
-
-
-        const value =
-          change.value ||
-          {};
-
-
-        if (!value.message) {
-
-          continue;
-        }
-
-
-        addMessage({
-
-          senderId:
-            value.sender?.id,
-
-          recipientId:
-            value.recipient?.id,
-
-          text:
-            value.message?.text,
-
-          timestamp:
-            value.timestamp,
-
-          messageId:
-            value.message?.mid,
-        });
-      }
-    }
-  }
-
-
-  messages.sort(
-    (
-      a,
-      b
-    ) =>
-      b.timestamp -
-      a.timestamp
+  receivedUpdates.unshift(
+    body
   );
-
-
-  return messages.slice(
-    0,
-    30
-  );
-}
-
-
-/**
- * ======================================================
- * VK FIXIE PROXY
- * ======================================================
- */
-
-function getVkProxy() {
-
-  const proxyUrl =
-    process.env.VK_FIXIE_URL;
-
-
-  if (!proxyUrl) {
-
-    throw new Error(
-      "VK_FIXIE_URL is not configured"
-    );
-  }
-
-
-  const parsed =
-    new URL(
-      proxyUrl
-    );
-
-
-  return {
-
-    protocol:
-      parsed.protocol.replace(
-        ":",
-        ""
-      ),
-
-    host:
-      parsed.hostname,
-
-    port:
-      Number(
-        parsed.port ||
-        80
-      ),
-
-    auth: {
-
-      username:
-        decodeURIComponent(
-          parsed.username
-        ),
-
-      password:
-        decodeURIComponent(
-          parsed.password
-        ),
-    },
-  };
-}
-
-
-/**
- * ======================================================
- * VK API REQUEST
- * ======================================================
- */
-
-async function vkApi(
-  method,
-  params = {}
-) {
-
-  if (!vkAccessToken) {
-
-    throw new Error(
-      "VK_ACCESS_TOKEN is not configured"
-    );
-  }
-
-
-  const form =
-    new URLSearchParams();
-
-
-  for (
-    const [
-      key,
-      value
-    ]
-    of Object.entries(
-      params
-    )
-  ) {
-
-    if (
-      value !==
-        undefined &&
-      value !==
-        null
-    ) {
-
-      form.append(
-        key,
-        String(value)
-      );
-    }
-  }
-
-
-  form.append(
-    "access_token",
-    vkAccessToken
-  );
-
-
-  form.append(
-    "v",
-    VK_API_VERSION
-  );
-
-
-  const response =
-    await axios.post(
-
-      `https://api.vk.com/method/${method}`,
-
-      form.toString(),
-
-      {
-        headers: {
-
-          "Content-Type":
-            "application/x-www-form-urlencoded",
-        },
-
-        proxy:
-          getVkProxy(),
-
-        timeout:
-          30000,
-      }
-    );
 
 
   if (
-    response.data?.error
+    receivedUpdates.length >
+    100
   ) {
 
-    const vkError =
-      response.data.error;
-
-
-    const error =
-      new Error(
-        `VK ${method}: ${vkError.error_msg}`
+    receivedUpdates =
+      receivedUpdates.slice(
+        0,
+        100
       );
-
-
-    error.vkError =
-      vkError;
-
-
-    throw error;
   }
 
 
-  return response
-    .data
-    .response;
-}
-
-
-function sendVkError(
-  res,
-  error
-) {
-
-  console.error(
-    "VK ERROR:",
-    error.response?.data ||
-    error.vkError ||
-    error.message
-  );
-
-
-  return res
-    .status(500)
-    .json({
-
-      success:
-        false,
-
-      error:
-        error.message,
-
-      vk_error:
-        error.vkError ||
-        error.response?.data ||
-        null,
-    });
-}
-
-
-/**
- * ======================================================
- * VK OAUTH STATE
- * ======================================================
- */
-
-function createVkOAuthState() {
-
-  if (!VK_STATE_SECRET) {
-
-    throw new Error(
-      "VK OAuth state secret is not configured"
-    );
-  }
-
-
-  const timestamp =
-    Date.now()
-      .toString();
-
-
-  const nonce =
-    crypto
-      .randomBytes(24)
-      .toString("hex");
-
-
-  const payload =
-    `${timestamp}.${nonce}`;
-
-
-  const signature =
-    crypto
-      .createHmac(
-        "sha256",
-        VK_STATE_SECRET
-      )
-      .update(payload)
-      .digest("hex");
-
-
-  return (
-    `${payload}.${signature}`
+  console.log(
+    "Webhook stored in memory",
+    {
+      totalUpdates:
+        receivedUpdates.length,
+    }
   );
 }
-
-
-function validateVkOAuthState(
-  state
-) {
-
-  if (
-    !state ||
-    !VK_STATE_SECRET
-  ) {
-
-    return false;
-  }
-
-
-  const parts =
-    String(state)
-      .split(".");
-
-
-  if (
-    parts.length !==
-    3
-  ) {
-
-    return false;
-  }
-
-
-  const [
-    timestamp,
-    nonce,
-    signature
-  ] =
-    parts;
-
-
-  const timestampNumber =
-    Number(
-      timestamp
-    );
-
-
-  if (
-    !Number.isFinite(
-      timestampNumber
-    )
-  ) {
-
-    return false;
-  }
-
-
-  const age =
-    Date.now() -
-    timestampNumber;
-
-
-  if (
-    age < 0 ||
-    age >
-      10 * 60 * 1000
-  ) {
-
-    return false;
-  }
-
-
-  const payload =
-    `${timestamp}.${nonce}`;
-
-
-  const expectedSignature =
-    crypto
-      .createHmac(
-        "sha256",
-        VK_STATE_SECRET
-      )
-      .update(payload)
-      .digest("hex");
-
-
-  try {
-
-    const receivedBuffer =
-      Buffer.from(
-        signature,
-        "hex"
-      );
-
-
-    const expectedBuffer =
-      Buffer.from(
-        expectedSignature,
-        "hex"
-      );
-
-
-    if (
-      receivedBuffer.length !==
-      expectedBuffer.length
-    ) {
-
-      return false;
-    }
-
-
-    return crypto.timingSafeEqual(
-      receivedBuffer,
-      expectedBuffer
-    );
-
-
-  } catch (_) {
-
-    return false;
-  }
-}
-
-
-/**
- * ======================================================
- * VK OAUTH START
- * ======================================================
- *
- * Открываем:
- *
- * https://auth.enzhicrew.ru/vk/auth
- */
-
-app.get(
-  "/vk/auth",
-
-  function (
-    req,
-    res
-  ) {
-
-    const missing =
-      [];
-
-
-    if (!VK_APP_ID) {
-
-      missing.push(
-        "VK_APP_ID"
-      );
-    }
-
-
-    if (!VK_CLIENT_SECRET) {
-
-      missing.push(
-        "VK_CLIENT_SECRET"
-      );
-    }
-
-
-    if (!VK_REDIRECT_URI) {
-
-      missing.push(
-        "VK_REDIRECT_URI"
-      );
-    }
-
-
-    if (
-      !process.env
-        .VK_FIXIE_URL
-    ) {
-
-      missing.push(
-        "VK_FIXIE_URL"
-      );
-    }
-
-
-    if (!VK_STATE_SECRET) {
-
-      missing.push(
-        "VK_OAUTH_STATE_SECRET"
-      );
-    }
-
-
-    if (
-      missing.length >
-      0
-    ) {
-
-      return res
-        .status(500)
-        .json({
-
-          success:
-            false,
-
-          error:
-            "VK OAuth is not configured",
-
-          missing:
-            missing,
-        });
-    }
-
-
-    const state =
-      createVkOAuthState();
-
-
-    const params =
-      new URLSearchParams({
-
-        client_id:
-          String(
-            VK_APP_ID
-          ),
-
-        display:
-          "page",
-
-        redirect_uri:
-          VK_REDIRECT_URI,
-
-      scope:
-  "wall,groups",
-
-        response_type:
-          "code",
-
-        v:
-          VK_API_VERSION,
-
-        state:
-          state,
-      });
-
-
-    return res.redirect(
-
-      `https://oauth.vk.com/authorize?${params.toString()}`
-    );
-  }
-);
-
-
-/**
- * ======================================================
- * VK OAUTH CALLBACK
- * ======================================================
- */
-
-app.get(
-  "/vk/callback",
-
-  async function (
-    req,
-    res
-  ) {
-
-    const code =
-      req.query.code;
-
-
-    const state =
-      req.query.state;
-
-
-    if (
-      req.query.error
-    ) {
-
-      return res
-        .status(400)
-        .send(
-
-          escapeHtml(
-
-            req.query
-              .error_description ||
-
-            req.query
-              .error
-          )
-        );
-    }
-
-
-    if (!code) {
-
-      return res
-        .status(400)
-        .send(
-          "VK authorization code is missing"
-        );
-    }
-
-
-    if (
-      !validateVkOAuthState(
-        state
-      )
-    ) {
-
-      return res
-        .status(403)
-        .send(
-          "Invalid VK OAuth state"
-        );
-    }
-
-
-    try {
-
-      const tokenResponse =
-        await axios.get(
-
-          "https://oauth.vk.com/access_token",
-
-          {
-            params: {
-
-              client_id:
-                VK_APP_ID,
-
-              client_secret:
-                VK_CLIENT_SECRET,
-
-              redirect_uri:
-                VK_REDIRECT_URI,
-
-              code:
-                String(
-                  code
-                ),
-            },
-
-            proxy:
-              getVkProxy(),
-
-            timeout:
-              30000,
-          }
-        );
-
-
-      const data =
-        tokenResponse.data;
-
-
-      if (
-        data?.error
-      ) {
-
-        return res
-          .status(400)
-          .json({
-
-            success:
-              false,
-
-            vk:
-              data,
-          });
-      }
-
-
-      if (
-        !data?.access_token
-      ) {
-
-        return res
-          .status(400)
-          .json({
-
-            success:
-              false,
-
-            error:
-              "VK did not return access_token",
-
-            response:
-              data,
-          });
-      }
-
-
-      vkAccessToken =
-        data.access_token;
-
-
-      console.log(
-        "VK CLASSIC USER TOKEN RECEIVED",
-        {
-          user_id:
-            data.user_id,
-
-          expires_in:
-            data.expires_in,
-        }
-      );
-
-
-      /**
-       * Проверяем токен сразу.
-       */
-
-      try {
-
-        await vkApi(
-
-          "photos.getWallUploadServer",
-
-          {
-            group_id:
-              VK_GROUP_ID,
-          }
-        );
-
-
-      } catch (
-        testError
-      ) {
-
-        return res
-          .status(500)
-          .json({
-
-            success:
-              false,
-
-            message:
-              "User Token получен, но photos.getWallUploadServer не работает",
-
-            user_id:
-              data.user_id,
-
-            vk_error:
-              testError.vkError ||
-              testError.message,
-          });
-      }
-
-
-      return res
-        .status(200)
-        .send(`
-<!DOCTYPE html>
-
-<html lang="ru">
-
-<head>
-
-  <meta charset="UTF-8">
-
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1"
-  >
-
-  <title>
-    VK подключён
-  </title>
-
-  <style>
-
-    body {
-      font-family:
-        Arial,
-        sans-serif;
-
-      background:
-        #f5f5f5;
-
-      padding:
-        30px 15px;
-
-      color:
-        #182230;
-    }
-
-    .card {
-      max-width:
-        700px;
-
-      margin:
-        auto;
-
-      background:
-        #ffffff;
-
-      padding:
-        30px;
-
-      border-radius:
-        16px;
-
-      box-shadow:
-        0 5px 20px
-        rgba(0,0,0,.08);
-    }
-
-    .success {
-      color:
-        #079455;
-
-      font-weight:
-        700;
-    }
-
-    textarea {
-      width:
-        100%;
-
-      min-height:
-        160px;
-
-      padding:
-        12px;
-
-      box-sizing:
-        border-box;
-
-      margin-top:
-        10px;
-    }
-
-    .warning {
-      color:
-        #667085;
-
-      margin-top:
-        20px;
-    }
-
-  </style>
-
-</head>
-
-
-<body>
-
-  <div class="card">
-
-    <h1>
-      VK успешно подключён
-    </h1>
-
-
-    <p class="success">
-      photos.getWallUploadServer работает.
-    </p>
-
-
-    <p>
-
-      User ID:
-
-      <strong>
-        ${escapeHtml(
-          data.user_id
-        )}
-      </strong>
-
-    </p>
-
-
-    <p>
-
-      Скопируй токен ниже
-      и сохрани в Heroku
-      Config Vars как
-
-      <strong>
-        VK_ACCESS_TOKEN
-      </strong>.
-
-    </p>
-
-
-    <textarea readonly>${escapeHtml(
-      data.access_token
-    )}</textarea>
-
-
-    <p class="warning">
-
-      Никому не отправляй
-      этот токен.
-
-    </p>
-
-  </div>
-
-</body>
-
-</html>
-      `);
-
-
-    } catch (error) {
-
-      console.error(
-
-        "VK OAuth callback failed:",
-
-        error.response?.data ||
-        error.message
-      );
-
-
-      return res
-        .status(500)
-        .json({
-
-          success:
-            false,
-
-          error:
-            error.message,
-
-          vk:
-            error.response?.data ||
-            null,
-        });
-    }
-  }
-);
-
-
-/**
- * ======================================================
- * VK STATUS
- * ======================================================
- */
-
-app.get(
-  "/vk/status",
-
-  async function (
-    req,
-    res
-  ) {
-
-    if (!vkAccessToken) {
-
-      return res.json({
-
-        success:
-          false,
-
-        connected:
-          false,
-
-        message:
-          "VK_ACCESS_TOKEN is missing",
-      });
-    }
-
-
-    try {
-
-      const uploadServer =
-        await vkApi(
-
-          "photos.getWallUploadServer",
-
-          {
-            group_id:
-              VK_GROUP_ID,
-          }
-        );
-
-
-      return res.json({
-
-        success:
-          true,
-
-        connected:
-          true,
-
-        group_id:
-          VK_GROUP_ID,
-
-        upload_server_available:
-          Boolean(
-            uploadServer
-              ?.upload_url
-          ),
-      });
-
-
-    } catch (error) {
-
-      return sendVkError(
-        res,
-        error
-      );
-    }
-  }
-);
-
-
-/**
- * ======================================================
- * VK POST WITH PHOTO
- * ======================================================
- *
- * POST:
- *
- * https://auth.enzhicrew.ru/vk/post
- *
- * Header:
- *
- * X-VK-Post-Secret
- *
- * JSON:
- *
- * {
- *   "image_url": "https://...",
- *   "caption": "Text"
- * }
- */
-
-app.post(
-  "/vk/post",
-
-  async function (
-    req,
-    res
-  ) {
-
-    const receivedSecret =
-      req.get(
-        "X-VK-Post-Secret"
-      );
-
-
-    if (
-      !VK_POST_SECRET ||
-      receivedSecret !==
-        VK_POST_SECRET
-    ) {
-
-      return res
-        .status(401)
-        .json({
-
-          success:
-            false,
-
-          error:
-            "Unauthorized",
-        });
-    }
-
-
-    const {
-      image_url,
-      caption,
-    } =
-      req.body ||
-      {};
-
-
-    if (!image_url) {
-
-      return res
-        .status(400)
-        .json({
-
-          success:
-            false,
-
-          error:
-            "image_url is required",
-        });
-    }
-
-
-    if (!vkAccessToken) {
-
-      return res
-        .status(500)
-        .json({
-
-          success:
-            false,
-
-          error:
-            "VK_ACCESS_TOKEN is missing. Open /vk/auth first.",
-        });
-    }
-
-
-    try {
-
-      /**
-       * STEP 1
-       *
-       * Получаем upload_url.
-       */
-
-      const uploadServer =
-        await vkApi(
-
-          "photos.getWallUploadServer",
-
-          {
-            group_id:
-              VK_GROUP_ID,
-          }
-        );
-
-
-      if (
-        !uploadServer
-          ?.upload_url
-      ) {
-
-        throw new Error(
-          "VK did not return upload_url"
-        );
-      }
-
-
-      /**
-       * STEP 2
-       *
-       * Скачиваем картинку.
-       */
-
-      const imageResponse =
-        await axios.get(
-
-          String(
-            image_url
-          ),
-
-          {
-            responseType:
-              "arraybuffer",
-
-            timeout:
-              30000,
-
-            maxContentLength:
-              20 *
-              1024 *
-              1024,
-
-            maxBodyLength:
-              20 *
-              1024 *
-              1024,
-          }
-        );
-
-
-      const imageBuffer =
-        Buffer.from(
-          imageResponse.data
-        );
-
-
-      const contentType =
-        String(
-
-          imageResponse
-            .headers[
-              "content-type"
-            ] ||
-
-          "image/jpeg"
-        )
-          .split(";")[0]
-          .trim();
-
-
-      if (
-        !contentType
-          .startsWith(
-            "image/"
-          )
-      ) {
-
-        throw new Error(
-          `image_url returned ${contentType}, not an image`
-        );
-      }
-
-
-      let extension =
-        "jpg";
-
-
-      if (
-        contentType ===
-        "image/png"
-      ) {
-
-        extension =
-          "png";
-
-      } else if (
-        contentType ===
-        "image/webp"
-      ) {
-
-        extension =
-          "webp";
-
-      } else if (
-        contentType ===
-        "image/gif"
-      ) {
-
-        extension =
-          "gif";
-      }
-
-
-      /**
-       * STEP 3
-       *
-       * Формируем multipart.
-       */
-
-      const uploadForm =
-        new FormData();
-
-
-      uploadForm.append(
-
-        "photo",
-
-        new Blob(
-          [
-            imageBuffer
-          ],
-          {
-            type:
-              contentType,
-          }
-        ),
-
-        `photo.${extension}`
-      );
-
-
-      /**
-       * STEP 4
-       *
-       * Загружаем фото на VK.
-       *
-       * Через тот же Fixie IP.
-       */
-
-      const uploaded =
-        await axios.post(
-
-          uploadServer
-            .upload_url,
-
-          uploadForm,
-
-          {
-            proxy:
-              getVkProxy(),
-
-            timeout:
-              60000,
-
-            maxBodyLength:
-              Infinity,
-
-            maxContentLength:
-              Infinity,
-          }
-        );
-
-
-      let uploadData =
-        uploaded.data;
-
-
-      if (
-        typeof uploadData ===
-        "string"
-      ) {
-
-        uploadData =
-          JSON.parse(
-            uploadData
-          );
-      }
-
-
-      if (
-        !uploadData?.server ||
-        !uploadData?.photo ||
-        !uploadData?.hash
-      ) {
-
-        console.error(
-          "VK upload response:",
-          uploadData
-        );
-
-
-        throw new Error(
-          "Invalid response from VK upload server"
-        );
-      }
-
-
-      /**
-       * STEP 5
-       *
-       * Сохраняем фото.
-       */
-
-      const savedPhotos =
-        await vkApi(
-
-          "photos.saveWallPhoto",
-
-          {
-            group_id:
-              VK_GROUP_ID,
-
-            server:
-              uploadData.server,
-
-            photo:
-              typeof uploadData.photo ===
-              "string"
-
-                ? uploadData.photo
-
-                : JSON.stringify(
-                    uploadData.photo
-                  ),
-
-            hash:
-              uploadData.hash,
-          }
-        );
-
-
-      if (
-        !Array.isArray(
-          savedPhotos
-        ) ||
-        !savedPhotos[0]
-      ) {
-
-        throw new Error(
-          "VK did not save photo"
-        );
-      }
-
-
-      const photo =
-        savedPhotos[0];
-
-
-      const attachment =
-        `photo${photo.owner_id}_${photo.id}`;
-
-
-      /**
-       * STEP 6
-       *
-       * Публикуем пост.
-       */
-
-      const post =
-        await vkApi(
-
-          "wall.post",
-
-          {
-            owner_id:
-              `-${VK_GROUP_ID}`,
-
-            from_group:
-              1,
-
-            message:
-              String(
-                caption ||
-                ""
-              ),
-
-            attachments:
-              attachment,
-          }
-        );
-
-
-      return res
-        .status(200)
-        .json({
-
-          success:
-            true,
-
-          post_id:
-            post.post_id,
-
-          attachment:
-            attachment,
-
-          group_id:
-            VK_GROUP_ID,
-        });
-
-
-    } catch (error) {
-
-      return sendVkError(
-        res,
-        error
-      );
-    }
-  }
-);
 
 
 /**
@@ -2111,10 +682,7 @@ app.post(
 app.get(
   "/",
 
-  function (
-    req,
-    res
-  ) {
+  function (req, res) {
 
     return res.redirect(
       "/instagram-admin"
@@ -2132,10 +700,7 @@ app.get(
 app.get(
   "/health",
 
-  function (
-    req,
-    res
-  ) {
+  function (req, res) {
 
     return res
       .status(200)
@@ -2160,10 +725,7 @@ app.get(
 app.get(
   "/instagram-admin",
 
-  async function (
-    req,
-    res
-  ) {
+  async function (req, res) {
 
     res.set(
       "Cache-Control",
@@ -2174,14 +736,11 @@ app.get(
     let account =
       null;
 
-
     let errorMessage =
       null;
 
 
-    if (
-      !instagramAccessToken
-    ) {
+    if (!instagramAccessToken) {
 
       errorMessage =
         "Instagram access token is not configured.";
@@ -2220,20 +779,12 @@ app.get(
         account = {
 
           username:
-            response
-              .data
-              .username ||
+            response.data.username ||
             "unknown",
 
           userId:
-            response
-              .data
-              .user_id ||
-
-            response
-              .data
-              .id ||
-
+            response.data.user_id ||
+            response.data.id ||
             "unknown",
         };
 
@@ -2245,17 +796,11 @@ app.get(
         );
 
 
-        if (
-          error.response
-        ) {
+        if (error.response) {
 
           console.error(
-
             JSON.stringify(
-
-              error.response
-                .data,
-
+              error.response.data,
               null,
               2
             )
@@ -2263,19 +808,16 @@ app.get(
 
 
           errorMessage =
-            error.response
-              .data
+            error.response.data
               ?.error
               ?.message ||
 
             `Instagram API returned HTTP ${error.response.status}`;
 
-
         } else {
 
           errorMessage =
             error.message ||
-
             "Instagram API request failed.";
         }
       }
@@ -2286,22 +828,35 @@ app.get(
       account
 
         ? `
+          <div class="account-card">
 
-          <div class="card">
+            <div class="connection-heading">
 
-            <div class="connected">
-              ● Connected account
+              <span
+                class="status-dot"
+              ></span>
+
+              <strong>
+                Connected account
+              </strong>
+
             </div>
 
-            <h2>
+
+            <div class="username">
+
               @${escapeHtml(
                 account.username
               )}
-            </h2>
 
-            <p>
+            </div>
 
-              Account ID:
+
+            <div class="data-row">
+
+              <span>
+                Account ID
+              </span>
 
               <strong>
                 ${escapeHtml(
@@ -2309,18 +864,32 @@ app.get(
                 )}
               </strong>
 
-            </p>
+            </div>
+
+
+            <div class="data-row">
+
+              <span>
+                Status
+              </span>
+
+              <strong
+                class="connected"
+              >
+                Connected
+              </strong>
+
+            </div>
 
           </div>
-
         `
 
         : `
-
-          <div class="card error">
+          <div class="error-card">
 
             <strong>
-              Instagram account is not connected
+              Instagram account
+              is not connected
             </strong>
 
             <p>
@@ -2330,208 +899,175 @@ app.get(
             </p>
 
           </div>
-
         `;
 
 
     const buttonText =
       account
-
         ? "Reconnect Instagram Account"
-
         : "Connect Instagram Account";
 
 
     return res
       .status(200)
       .send(`
+        <!DOCTYPE html>
+
+        <html lang="en">
+
+        <head>
+
+          <meta charset="UTF-8">
+
+          <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0"
+          >
+
+          <title>
+            Enzhi Crew Automation
+          </title>
+
+
+          <style>
+
+            * {
+              box-sizing: border-box;
+            }
+
+            body {
+              margin: 0;
+              min-height: 100vh;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              padding: 24px;
+              background: #f5f6f8;
+              color: #182230;
+
+              font-family:
+                Arial,
+                Helvetica,
+                sans-serif;
+            }
+
+            .container {
+              width: 100%;
+              max-width: 620px;
+              padding: 40px;
+              background: #ffffff;
+              border-radius: 18px;
+
+              box-shadow:
+                0 16px 45px
+                rgba(0,0,0,0.09);
+            }
+
+            h1 {
+              margin: 0 0 10px;
+              font-size: 31px;
+            }
+
+            .description {
+              margin: 0 0 26px;
+              color: #667085;
+              line-height: 1.55;
+            }
+
+            .connect-button {
+              display: inline-block;
+              margin-bottom: 28px;
+              padding: 14px 22px;
+              border-radius: 10px;
+              background: #0866ff;
+              color: #ffffff;
+              font-weight: 700;
+              text-decoration: none;
+            }
+
+            .account-card,
+            .error-card {
+              padding: 24px;
+              border: 1px solid #dfe3e8;
+              border-radius: 14px;
+            }
+
+            .connection-heading {
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              margin-bottom: 18px;
+            }
+
+            .status-dot {
+              width: 11px;
+              height: 11px;
+              border-radius: 50%;
+              background: #12b76a;
+            }
+
+            .username {
+              margin-bottom: 22px;
+              font-size: 26px;
+              font-weight: 700;
+            }
+
+            .data-row {
+              display: flex;
+              justify-content: space-between;
+              gap: 20px;
+              padding: 13px 0;
+              border-top: 1px solid #eeeeee;
+            }
 
-<!DOCTYPE html>
+            .data-row span {
+              color: #667085;
+            }
 
-<html lang="en">
+            .connected {
+              color: #079455;
+            }
 
-<head>
+            .error-card {
+              background: #fff5f5;
+              border-color: #f4b4b4;
+            }
 
-  <meta charset="UTF-8">
+          </style>
 
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
-  >
+        </head>
 
-  <title>
-    Enzhi Crew Automation
-  </title>
 
+        <body>
 
-  <style>
+          <main class="container">
 
-    * {
-      box-sizing:
-        border-box;
-    }
+            <h1>
+              Enzhi Crew Automation
+            </h1>
 
-    body {
 
-      margin:
-        0;
+            <p class="description">
+              Connect and manage an
+              Instagram professional account.
+            </p>
 
-      min-height:
-        100vh;
 
-      display:
-        flex;
+            <a
+              class="connect-button"
+              href="/auth/instagram"
+            >
+              ${buttonText}
+            </a>
 
-      align-items:
-        center;
 
-      justify-content:
-        center;
+            ${accountBlock}
 
-      padding:
-        24px;
+          </main>
 
-      background:
-        #f5f6f8;
+        </body>
 
-      color:
-        #182230;
-
-      font-family:
-        Arial,
-        sans-serif;
-    }
-
-    .container {
-
-      width:
-        100%;
-
-      max-width:
-        620px;
-
-      padding:
-        40px;
-
-      background:
-        #ffffff;
-
-      border-radius:
-        18px;
-
-      box-shadow:
-        0 16px 45px
-        rgba(0,0,0,.09);
-    }
-
-    h1 {
-      margin:
-        0 0 10px;
-    }
-
-    .description {
-      color:
-        #667085;
-    }
-
-    .button {
-
-      display:
-        inline-block;
-
-      margin:
-        15px 0 25px;
-
-      padding:
-        14px 22px;
-
-      border-radius:
-        10px;
-
-      background:
-        #0866ff;
-
-      color:
-        #ffffff;
-
-      font-weight:
-        700;
-
-      text-decoration:
-        none;
-    }
-
-    .card {
-
-      padding:
-        24px;
-
-      border:
-        1px solid #dfe3e8;
-
-      border-radius:
-        14px;
-    }
-
-    .error {
-
-      background:
-        #fff5f5;
-
-      border-color:
-        #f4b4b4;
-    }
-
-    .connected {
-
-      color:
-        #079455;
-
-      font-weight:
-        700;
-    }
-
-  </style>
-
-</head>
-
-
-<body>
-
-  <main class="container">
-
-    <h1>
-      Enzhi Crew Automation
-    </h1>
-
-
-    <p class="description">
-
-      Connect and manage an
-      Instagram professional account.
-
-    </p>
-
-
-    <a
-      class="button"
-      href="/auth/instagram"
-    >
-
-      ${buttonText}
-
-    </a>
-
-
-    ${accountBlock}
-
-
-  </main>
-
-</body>
-
-</html>
-
+        </html>
       `);
   }
 );
@@ -2546,49 +1082,34 @@ app.get(
 app.get(
   "/auth/instagram",
 
-  function (
-    req,
-    res
-  ) {
+  function (req, res) {
 
     const missingVariables =
       [];
 
 
-    if (
-      !INSTAGRAM_APP_ID
-    ) {
-
+    if (!INSTAGRAM_APP_ID) {
       missingVariables.push(
         "INSTAGRAM_APP_ID"
       );
     }
 
 
-    if (
-      !INSTAGRAM_APP_SECRET
-    ) {
-
+    if (!INSTAGRAM_APP_SECRET) {
       missingVariables.push(
         "INSTAGRAM_APP_SECRET"
       );
     }
 
 
-    if (
-      !INSTAGRAM_REDIRECT_URI
-    ) {
-
+    if (!INSTAGRAM_REDIRECT_URI) {
       missingVariables.push(
         "INSTAGRAM_REDIRECT_URI"
       );
     }
 
 
-    if (
-      !OAUTH_STATE_SECRET
-    ) {
-
+    if (!OAUTH_STATE_SECRET) {
       missingVariables.push(
         "OAUTH_STATE_SECRET"
       );
@@ -2603,7 +1124,6 @@ app.get(
       return res
         .status(500)
         .send(`
-
           <h2>
             Instagram OAuth
             is not configured
@@ -2611,12 +1131,9 @@ app.get(
 
           <pre>
 ${escapeHtml(
-  missingVariables.join(
-    "\n"
-  )
+  missingVariables.join("\n")
 )}
           </pre>
-
         `);
     }
 
@@ -2655,10 +1172,13 @@ ${escapeHtml(
       });
 
 
-    return res.redirect(
-
+    const authorizationUrl =
       "https://www.instagram.com/oauth/authorize?" +
-      parameters.toString()
+      parameters.toString();
+
+
+    return res.redirect(
+      authorizationUrl
     );
   }
 );
@@ -2671,17 +1191,12 @@ ${escapeHtml(
  */
 
 app.get(
-
   "/auth/instagram/callback",
 
-  async function (
-    req,
-    res
-  ) {
+  async function (req, res) {
 
     const authorizationCode =
       req.query.code;
-
 
     const returnedState =
       req.query.state;
@@ -2690,7 +1205,6 @@ app.get(
     console.log(
       "Instagram OAuth callback received",
       {
-
         hasCode:
           Boolean(
             authorizationCode
@@ -2708,29 +1222,20 @@ app.get(
     );
 
 
-    if (
-      req.query.error
-    ) {
+    if (req.query.error) {
 
       return res
         .status(400)
         .send(
-
           escapeHtml(
-
-            req.query
-              .error_description ||
-
-            req.query
-              .error
+            req.query.error_description ||
+            req.query.error
           )
         );
     }
 
 
-    if (
-      !authorizationCode
-    ) {
+    if (!authorizationCode) {
 
       return res
         .status(400)
@@ -2761,41 +1266,31 @@ app.get(
 
 
       tokenForm.append(
-
         "client_id",
-
         INSTAGRAM_APP_ID
       );
 
 
       tokenForm.append(
-
         "client_secret",
-
         INSTAGRAM_APP_SECRET
       );
 
 
       tokenForm.append(
-
         "grant_type",
-
         "authorization_code"
       );
 
 
       tokenForm.append(
-
         "redirect_uri",
-
         INSTAGRAM_REDIRECT_URI
       );
 
 
       tokenForm.append(
-
         "code",
-
         String(
           authorizationCode
         )
@@ -2878,7 +1373,6 @@ app.get(
               .access_token;
         }
 
-
       } catch (error) {
 
         console.error(
@@ -2907,18 +1401,13 @@ app.get(
         error.message;
 
 
-      if (
-        error.response
-      ) {
+      if (error.response) {
 
         message =
-
-          error.response
-            .data
+          error.response.data
             ?.error_message ||
 
-          error.response
-            .data
+          error.response.data
             ?.error
             ?.message ||
 
@@ -2929,9 +1418,7 @@ app.get(
       return res
         .status(500)
         .send(
-          escapeHtml(
-            message
-          )
+          escapeHtml(message)
         );
     }
   }
@@ -2947,22 +1434,17 @@ app.get(
 app.get(
   "/instagram",
 
-  function (
-    req,
-    res
-  ) {
+  function (req, res) {
 
     const mode =
       req.query[
         "hub.mode"
       ];
 
-
     const receivedToken =
       req.query[
         "hub.verify_token"
       ];
-
 
     const challenge =
       req.query[
@@ -2971,14 +1453,10 @@ app.get(
 
 
     if (
-      mode ===
-        "subscribe" &&
-
+      mode === "subscribe" &&
       VERIFY_TOKEN &&
-
       receivedToken ===
         VERIFY_TOKEN &&
-
       challenge
     ) {
 
@@ -2989,9 +1467,7 @@ app.get(
 
       return res
         .status(200)
-        .type(
-          "text/plain"
-        )
+        .type("text/plain")
         .send(
           String(
             challenge
@@ -3018,18 +1494,17 @@ app.get(
 app.post(
   "/instagram",
 
-  async function (
-    req,
-    res
-  ) {
+  async function (req, res) {
+
+    console.log(
+      "======================================="
+    );
 
     console.log(
       "Instagram Webhook received"
     );
 
-
     console.log(
-
       JSON.stringify(
         req.body,
         null,
@@ -3039,9 +1514,7 @@ app.post(
 
 
     if (
-      !verifyMetaSignature(
-        req
-      )
+      !verifyMetaSignature(req)
     ) {
 
       console.log(
@@ -3055,16 +1528,26 @@ app.post(
     }
 
 
+    /**
+     * Сохраняем webhook.
+     */
     rememberUpdate(
       req.body
     );
 
 
+    /**
+     * Сразу отвечаем Meta.
+     */
     res.sendStatus(
       200
     );
 
 
+    /**
+     * Если Make подключен —
+     * пересылаем туда webhook.
+     */
     if (!MAKE_WEBHOOK) {
 
       console.log(
@@ -3104,8 +1587,7 @@ app.post(
     } catch (error) {
 
       console.error(
-        "Error sending to Make",
-        error.message
+        "Error sending to Make"
       );
     }
   }
@@ -3119,22 +1601,14 @@ app.post(
  */
 
 app.post(
-
   "/instagram-messages/subscribe",
 
-  async function (
-    req,
-    res
-  ) {
+  async function (req, res) {
 
-    if (
-      !instagramAccessToken
-    ) {
+    if (!instagramAccessToken) {
 
       return res.redirect(
-
         "/instagram-messages?error=" +
-
         encodeURIComponent(
           "Instagram access token is missing."
         )
@@ -3166,14 +1640,8 @@ app.post(
 
 
       const instagramUserId =
-
-        profileResponse
-          .data
-          .user_id ||
-
-        profileResponse
-          .data
-          .id;
+        profileResponse.data.user_id ||
+        profileResponse.data.id;
 
 
       await axios.post(
@@ -3196,9 +1664,7 @@ app.post(
 
 
       console.log(
-
         "Instagram messages webhook subscription enabled",
-
         {
           instagramUserId:
             instagramUserId,
@@ -3217,25 +1683,18 @@ app.post(
         error.message;
 
 
-      if (
-        error.response
-      ) {
+      if (error.response) {
 
         message =
-
-          error.response
-            .data
+          error.response.data
             ?.error
             ?.message ||
-
           message;
       }
 
 
       return res.redirect(
-
         "/instagram-messages?error=" +
-
         encodeURIComponent(
           message
         )
@@ -3249,23 +1708,18 @@ app.post(
  * ======================================================
  * CLEAR DEMO MESSAGES
  * ======================================================
+ *
+ * Используем перед записью App Review видео.
  */
 
 app.post(
-
   "/instagram-messages/clear",
 
-  function (
-    req,
-    res
-  ) {
+  function (req, res) {
 
-    receivedUpdates =
-      [];
+    receivedUpdates = [];
 
-
-    sentMessages =
-      [];
+    sentMessages = [];
 
 
     console.log(
@@ -3287,30 +1741,20 @@ app.post(
  */
 
 app.post(
-
   "/instagram-messages/send",
 
-  async function (
-    req,
-    res
-  ) {
+  async function (req, res) {
 
     const recipientId =
       String(
-
-        req.body
-          .recipientId ||
-
+        req.body.recipientId ||
         ""
       ).trim();
 
 
     const text =
       String(
-
-        req.body
-          .text ||
-
+        req.body.text ||
         ""
       ).trim();
 
@@ -3320,9 +1764,7 @@ app.post(
     ) {
 
       return res.redirect(
-
         "/instagram-messages?error=" +
-
         encodeURIComponent(
           "Instagram access token is missing."
         )
@@ -3336,9 +1778,7 @@ app.post(
     ) {
 
       return res.redirect(
-
         "/instagram-messages?error=" +
-
         encodeURIComponent(
           "Recipient or message is missing."
         )
@@ -3389,10 +1829,8 @@ app.post(
           text,
 
         messageId:
-
           response.data
             ?.message_id ||
-
           "",
 
         timestamp:
@@ -3411,25 +1849,18 @@ app.post(
         error.message;
 
 
-      if (
-        error.response
-      ) {
+      if (error.response) {
 
         message =
-
-          error.response
-            .data
+          error.response.data
             ?.error
             ?.message ||
-
           message;
       }
 
 
       return res.redirect(
-
         "/instagram-messages?error=" +
-
         encodeURIComponent(
           message
         )
@@ -3446,13 +1877,9 @@ app.post(
  */
 
 app.get(
-
   "/instagram-messages",
 
-  function (
-    req,
-    res
-  ) {
+  function (req, res) {
 
     res.set(
       "Cache-Control",
@@ -3465,42 +1892,31 @@ app.get(
 
 
     const sentSuccessfully =
-      req.query.sent ===
-      "1";
+      req.query.sent === "1";
 
 
     const subscribedSuccessfully =
-      req.query.subscribed ===
-      "1";
+      req.query.subscribed === "1";
 
 
     const clearedSuccessfully =
-      req.query.cleared ===
-      "1";
+      req.query.cleared === "1";
 
 
     const errorMessage =
       req.query.error
-
         ? String(
             req.query.error
           )
-
         : null;
 
 
     const incomingHtml =
-
-      messages.length >
-      0
+      messages.length > 0
 
         ? messages
-
             .map(
-
-              function (
-                message
-              ) {
+              function (message) {
 
                 let time =
                   "";
@@ -3520,7 +1936,6 @@ app.get(
                           "ru-RU"
                         );
 
-
                   } catch (_) {
 
                     time =
@@ -3530,7 +1945,6 @@ app.get(
 
 
                 return `
-
                   <div class="message-card">
 
                     <div class="message-header">
@@ -3539,19 +1953,16 @@ app.get(
                         Incoming message
                       </strong>
 
+
                       ${
                         time
-
                           ? `
                             <span class="time">
-
                               ${escapeHtml(
                                 time
                               )}
-
                             </span>
                           `
-
                           : ""
                       }
 
@@ -3622,16 +2033,12 @@ app.get(
                     </form>
 
                   </div>
-
                 `;
               }
             )
-
             .join("")
 
-
         : `
-
           <div class="empty-card">
 
             <strong>
@@ -3639,553 +2046,575 @@ app.get(
             </strong>
 
             <p>
-
               Send a Direct message
               to the connected
               Instagram account.
-
             </p>
 
           </div>
-
         `;
 
 
     const sentHtml =
-
-      sentMessages.length >
-      0
+      sentMessages.length > 0
 
         ? sentMessages
-
             .slice(
               0,
               10
             )
-
             .map(
-
-              function (
-                message
-              ) {
+              function (message) {
 
                 return `
-
                   <div class="sent-message">
 
                     <strong>
-
                       Sent to
-
                       ${escapeHtml(
                         message.recipientId
                       )}
-
                     </strong>
 
-
                     <div>
-
                       ${escapeHtml(
                         message.text
                       )}
-
                     </div>
 
                   </div>
-
                 `;
               }
             )
-
             .join("")
 
-
         : `
-
           <p class="muted">
 
             No replies sent during
             this server session.
 
           </p>
-
         `;
 
 
     return res
       .status(200)
       .send(`
+        <!DOCTYPE html>
 
-<!DOCTYPE html>
+        <html lang="en">
 
-<html lang="en">
+        <head>
 
-<head>
+          <meta charset="UTF-8">
 
-  <meta charset="UTF-8">
 
+          <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0"
+          >
 
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
-  >
 
+          <title>
+            Instagram Messages
+          </title>
 
-  <title>
-    Instagram Messages
-  </title>
 
+          <style>
 
-  <style>
+            * {
+              box-sizing: border-box;
+            }
 
-    * {
-      box-sizing:
-        border-box;
-    }
 
+            body {
 
-    body {
+              margin: 0;
 
-      margin:
-        0;
+              padding:
+                36px;
 
-      padding:
-        36px;
+              background:
+                #f5f6f8;
 
-      background:
-        #f5f6f8;
+              color:
+                #182230;
 
-      color:
-        #182230;
+              font-family:
+                Arial,
+                Helvetica,
+                sans-serif;
+            }
 
-      font-family:
-        Arial,
-        sans-serif;
-    }
 
+            .container {
 
-    .container {
+              max-width:
+                850px;
 
-      max-width:
-        850px;
+              margin:
+                0 auto;
+            }
 
-      margin:
-        0 auto;
-    }
 
+            h1 {
 
-    .subtitle,
-    .muted,
-    .time,
-    .label {
+              margin-bottom:
+                6px;
+            }
 
-      color:
-        #667085;
-    }
 
+            .subtitle {
 
-    .top-actions {
+              color:
+                #667085;
 
-      display:
-        flex;
+              margin-bottom:
+                25px;
+            }
 
-      gap:
-        12px;
 
-      flex-wrap:
-        wrap;
+            .top-actions {
 
-      margin-bottom:
-        25px;
-    }
+              display:
+                flex;
 
+              gap:
+                12px;
 
-    .button {
+              flex-wrap:
+                wrap;
 
-      display:
-        inline-block;
+              margin-bottom:
+                25px;
+            }
 
-      padding:
-        11px 16px;
 
-      border:
-        0;
+            .button {
 
-      border-radius:
-        9px;
+              display:
+                inline-block;
 
-      background:
-        #0866ff;
+              padding:
+                11px 16px;
 
-      color:
-        white;
+              border:
+                0;
 
-      text-decoration:
-        none;
+              border-radius:
+                9px;
 
-      cursor:
-        pointer;
+              background:
+                #0866ff;
 
-      font-weight:
-        700;
+              color:
+                white;
 
-      font-size:
-        14px;
-    }
+              text-decoration:
+                none;
 
+              cursor:
+                pointer;
 
-    .secondary {
+              font-weight:
+                700;
 
-      background:
-        #344054;
-    }
+              font-size:
+                14px;
+            }
 
 
-    .danger {
+            .secondary {
 
-      background:
-        #d92d20;
-    }
+              background:
+                #344054;
+            }
 
 
-    .message-card,
-    .empty-card,
-    .sent-message {
+            .danger {
 
-      background:
-        white;
+              background:
+                #d92d20;
+            }
 
-      border:
-        1px solid #e4e7ec;
 
-      border-radius:
-        14px;
+            .danger:hover {
 
-      padding:
-        22px;
+              background:
+                #b42318;
+            }
 
-      margin-bottom:
-        18px;
-    }
 
+            .message-card,
+            .empty-card {
 
-    .message-header {
+              background:
+                white;
 
-      display:
-        flex;
+              border:
+                1px solid #e4e7ec;
 
-      justify-content:
-        space-between;
+              border-radius:
+                14px;
 
-      gap:
-        15px;
+              padding:
+                22px;
 
-      margin-bottom:
-        20px;
-    }
+              margin-bottom:
+                18px;
+            }
 
 
-    .label {
+            .message-header {
 
-      font-size:
-        12px;
+              display:
+                flex;
 
-      margin-top:
-        12px;
+              justify-content:
+                space-between;
 
-      margin-bottom:
-        5px;
-    }
+              gap:
+                15px;
 
+              margin-bottom:
+                20px;
+            }
 
-    .sender {
 
-      font-weight:
-        700;
-    }
+            .time {
 
+              color:
+                #667085;
 
-    .message-text {
+              font-size:
+                13px;
+            }
 
-      padding:
-        14px;
 
-      background:
-        #f9fafb;
+            .label {
 
-      border-radius:
-        9px;
+              color:
+                #667085;
 
-      line-height:
-        1.5;
+              font-size:
+                12px;
 
-      margin-bottom:
-        20px;
+              margin-top:
+                12px;
 
-      white-space:
-        pre-wrap;
-    }
+              margin-bottom:
+                5px;
+            }
 
 
-    textarea {
+            .sender {
 
-      display:
-        block;
+              font-weight:
+                700;
+            }
 
-      width:
-        100%;
 
-      min-height:
-        90px;
+            .message-text {
 
-      resize:
-        vertical;
+              padding:
+                14px;
 
-      margin:
-        7px 0 12px;
+              background:
+                #f9fafb;
 
-      padding:
-        12px;
+              border-radius:
+                9px;
 
-      border:
-        1px solid #d0d5dd;
+              line-height:
+                1.5;
 
-      border-radius:
-        9px;
+              margin-bottom:
+                20px;
 
-      font:
-        inherit;
-    }
+              white-space:
+                pre-wrap;
+            }
 
 
-    .reply-button {
+            textarea {
 
-      padding:
-        11px 18px;
+              display:
+                block;
 
-      border:
-        0;
+              width:
+                100%;
 
-      border-radius:
-        9px;
+              min-height:
+                90px;
 
-      background:
-        #12b76a;
+              resize:
+                vertical;
 
-      color:
-        white;
+              margin-top:
+                7px;
 
-      font-weight:
-        700;
+              margin-bottom:
+                12px;
 
-      cursor:
-        pointer;
-    }
+              padding:
+                12px;
 
+              border:
+                1px solid #d0d5dd;
 
-    .success,
-    .error {
+              border-radius:
+                9px;
 
-      padding:
-        14px;
+              font-family:
+                inherit;
 
-      margin-bottom:
-        18px;
+              font-size:
+                14px;
+            }
 
-      border-radius:
-        10px;
-    }
 
+            .reply-button {
 
-    .success {
+              padding:
+                11px 18px;
 
-      background:
-        #ecfdf3;
+              border:
+                0;
 
-      border:
-        1px solid #abefc6;
-    }
+              border-radius:
+                9px;
 
+              background:
+                #12b76a;
 
-    .error {
+              color:
+                white;
 
-      background:
-        #fff1f0;
+              font-weight:
+                700;
 
-      border:
-        1px solid #fecdca;
-    }
+              cursor:
+                pointer;
+            }
 
-  </style>
 
-</head>
+            .success {
 
+              padding:
+                14px;
 
-<body>
+              margin-bottom:
+                18px;
 
-  <main class="container">
+              border-radius:
+                10px;
 
+              background:
+                #ecfdf3;
 
-    <h1>
-      Instagram Messages
-    </h1>
+              border:
+                1px solid #abefc6;
+            }
 
 
-    <p class="subtitle">
-      Enzhi Crew Automation
-    </p>
+            .error {
 
+              padding:
+                14px;
 
-    <div class="top-actions">
+              margin-bottom:
+                18px;
 
+              border-radius:
+                10px;
 
-      <a
-        class="button secondary"
-        href="/instagram-admin"
-      >
-        Instagram Account
-      </a>
+              background:
+                #fff1f0;
 
+              border:
+                1px solid #fecdca;
+            }
 
-      <a
-        class="button"
-        href="/instagram-messages"
-      >
-        Refresh Messages
-      </a>
 
+            .sent-message {
 
-      <form
-        method="POST"
-        action="/instagram-messages/clear"
-        style="margin:0"
-      >
+              background:
+                white;
 
-        <button
-          class="button danger"
-          type="submit"
-        >
-          Clear Messages
-        </button>
+              border:
+                1px solid #e4e7ec;
 
-      </form>
+              border-radius:
+                10px;
 
+              padding:
+                14px;
 
-      <form
-        method="POST"
-        action="/instagram-messages/subscribe"
-        style="margin:0"
-      >
+              margin-bottom:
+                10px;
+            }
 
-        <button
-          class="button"
-          type="submit"
-        >
-          Enable Message Webhooks
-        </button>
 
-      </form>
+            .muted {
 
+              color:
+                #667085;
+            }
 
-    </div>
+          </style>
 
+        </head>
 
-    ${
-      clearedSuccessfully
 
-        ? `
+        <body>
 
-          <div class="success">
+          <main class="container">
 
-            Messages cleared.
-            Ready for demonstration.
 
-          </div>
+            <h1>
+              Instagram Messages
+            </h1>
 
-        `
 
-        : ""
-    }
+            <p class="subtitle">
+              Enzhi Crew Automation
+            </p>
 
 
-    ${
-      subscribedSuccessfully
+            <div class="top-actions">
 
-        ? `
 
-          <div class="success">
+              <a
+                class="button secondary"
+                href="/instagram-admin"
+              >
+                Instagram Account
+              </a>
 
-            Instagram account
-            subscribed to
-            message webhooks.
 
-          </div>
+              <a
+                class="button"
+                href="/instagram-messages"
+              >
+                Refresh Messages
+              </a>
 
-        `
 
-        : ""
-    }
+              <form
+                method="POST"
+                action="/instagram-messages/clear"
+                style="margin:0"
+              >
 
+                <button
+                  class="button danger"
+                  type="submit"
+                >
+                  Clear Messages
+                </button>
 
-    ${
-      sentSuccessfully
+              </form>
 
-        ? `
 
-          <div class="success">
+              <form
+                method="POST"
+                action="/instagram-messages/subscribe"
+                style="margin:0"
+              >
 
-            Message sent successfully.
+                <button
+                  class="button"
+                  type="submit"
+                >
+                  Enable Message Webhooks
+                </button>
 
-          </div>
+              </form>
 
-        `
 
-        : ""
-    }
+            </div>
 
 
-    ${
-      errorMessage
+            ${
+              clearedSuccessfully
+                ? `
+                  <div class="success">
 
-        ? `
+                    Messages cleared.
+                    Ready for demonstration.
 
-          <div class="error">
+                  </div>
+                `
+                : ""
+            }
 
-            ${escapeHtml(
+
+            ${
+              subscribedSuccessfully
+                ? `
+                  <div class="success">
+
+                    Instagram account
+                    subscribed to
+                    message webhooks.
+
+                  </div>
+                `
+                : ""
+            }
+
+
+            ${
+              sentSuccessfully
+                ? `
+                  <div class="success">
+
+                    Message sent
+                    successfully.
+
+                  </div>
+                `
+                : ""
+            }
+
+
+            ${
               errorMessage
-            )}
+                ? `
+                  <div class="error">
 
-          </div>
+                    ${escapeHtml(
+                      errorMessage
+                    )}
 
-        `
-
-        : ""
-    }
-
-
-    <h2>
-      Incoming
-    </h2>
+                  </div>
+                `
+                : ""
+            }
 
 
-    ${incomingHtml}
+            <h2>
+              Incoming
+            </h2>
 
 
-    <h2>
-      Sent replies
-    </h2>
+            ${incomingHtml}
 
 
-    ${sentHtml}
+            <h2>
+              Sent replies
+            </h2>
 
 
-  </main>
+            ${sentHtml}
 
-</body>
 
-</html>
+          </main>
 
+        </body>
+
+        </html>
       `);
   }
 );
@@ -4198,17 +2627,11 @@ app.get(
  */
 
 app.get(
-
   "/instagram-conversations",
 
-  async function (
-    req,
-    res
-  ) {
+  async function (req, res) {
 
-    if (
-      !instagramAccessToken
-    ) {
+    if (!instagramAccessToken) {
 
       return res
         .status(500)
@@ -4247,14 +2670,8 @@ app.get(
 
 
       const instagramUserId =
-
-        profileResponse
-          .data
-          .user_id ||
-
-        profileResponse
-          .data
-          .id;
+        profileResponse.data.user_id ||
+        profileResponse.data.id;
 
 
       const conversationsResponse =
@@ -4295,28 +2712,22 @@ app.get(
             instagramUserId,
 
           username:
-
             profileResponse
               .data
               .username ||
-
             null,
         },
 
         conversations:
-
           conversationsResponse
             .data
             .data ||
-
           [],
 
         paging:
-
           conversationsResponse
             .data
             .paging ||
-
           null,
       });
 
@@ -4331,12 +2742,10 @@ app.get(
             false,
 
           error:
-
             error.response
               ?.data
               ?.error
               ?.message ||
-
             error.message,
         });
     }
@@ -4351,13 +2760,9 @@ app.get(
  */
 
 app.get(
-
   "/debug-instagram",
 
-  function (
-    req,
-    res
-  ) {
+  function (req, res) {
 
     return res
       .status(200)
@@ -4367,11 +2772,8 @@ app.get(
           receivedUpdates.length,
 
         latestUpdate:
-
           receivedUpdates.length
-
             ? receivedUpdates[0]
-
             : null,
 
         parsedMessages:
@@ -4388,13 +2790,9 @@ app.get(
  */
 
 app.post(
-
   "/instagram/deauthorize",
 
-  function (
-    req,
-    res
-  ) {
+  function (req, res) {
 
     console.log(
       "Instagram deauthorization received"
@@ -4415,13 +2813,9 @@ app.post(
  */
 
 app.post(
-
   "/instagram/data-deletion",
 
-  function (
-    req,
-    res
-  ) {
+  function (req, res) {
 
     const confirmationCode =
       crypto
@@ -4434,10 +2828,7 @@ app.post(
       .json({
 
         url:
-
-          `https://${req.get(
-            "host"
-          )}/instagram/data-deletion/status?code=${confirmationCode}`,
+          `https://${req.get("host")}/instagram/data-deletion/status?code=${confirmationCode}`,
 
         confirmation_code:
           confirmationCode,
@@ -4447,18 +2838,13 @@ app.post(
 
 
 app.get(
-
   "/instagram/data-deletion/status",
 
-  function (
-    req,
-    res
-  ) {
+  function (req, res) {
 
     return res
       .status(200)
       .send(`
-
         <h2>
           Data deletion request
         </h2>
@@ -4468,16 +2854,12 @@ app.get(
         </p>
 
         <p>
-
           Confirmation code:
-
           ${escapeHtml(
             req.query.code ||
             ""
           )}
-
         </p>
-
       `);
   }
 );
@@ -4490,25 +2872,19 @@ app.get(
  */
 
 app.get(
-
   "/facebook",
 
-  function (
-    req,
-    res
-  ) {
+  function (req, res) {
 
     const mode =
       req.query[
         "hub.mode"
       ];
 
-
     const token =
       req.query[
         "hub.verify_token"
       ];
-
 
     const challenge =
       req.query[
@@ -4517,23 +2893,16 @@ app.get(
 
 
     if (
-      mode ===
-        "subscribe" &&
-
+      mode === "subscribe" &&
       VERIFY_TOKEN &&
-
-      token ===
-        VERIFY_TOKEN &&
-
+      token === VERIFY_TOKEN &&
       challenge
     ) {
 
       return res
         .status(200)
         .send(
-          String(
-            challenge
-          )
+          String(challenge)
         );
     }
 
@@ -4546,18 +2915,12 @@ app.get(
 
 
 app.post(
-
   "/facebook",
 
-  function (
-    req,
-    res
-  ) {
+  function (req, res) {
 
     if (
-      !verifyMetaSignature(
-        req
-      )
+      !verifyMetaSignature(req)
     ) {
 
       return res.sendStatus(
@@ -4585,25 +2948,19 @@ app.post(
  */
 
 app.get(
-
   "/threads",
 
-  function (
-    req,
-    res
-  ) {
+  function (req, res) {
 
     const mode =
       req.query[
         "hub.mode"
       ];
 
-
     const token =
       req.query[
         "hub.verify_token"
       ];
-
 
     const challenge =
       req.query[
@@ -4612,23 +2969,16 @@ app.get(
 
 
     if (
-      mode ===
-        "subscribe" &&
-
+      mode === "subscribe" &&
       VERIFY_TOKEN &&
-
-      token ===
-        VERIFY_TOKEN &&
-
+      token === VERIFY_TOKEN &&
       challenge
     ) {
 
       return res
         .status(200)
         .send(
-          String(
-            challenge
-          )
+          String(challenge)
         );
     }
 
@@ -4641,13 +2991,9 @@ app.get(
 
 
 app.post(
-
   "/threads",
 
-  function (
-    req,
-    res
-  ) {
+  function (req, res) {
 
     rememberUpdate(
       req.body
@@ -4668,30 +3014,20 @@ app.post(
  */
 
 app.use(
-
-  function (
-    req,
-    res
-  ) {
+  function (req, res) {
 
     return res
       .status(404)
       .send(`
-
         <h2>
           Page not found
         </h2>
 
         <p>
-
           <a href="/instagram-admin">
-
             Open Enzhi Crew Automation
-
           </a>
-
         </p>
-
       `);
   }
 );
@@ -4704,12 +3040,9 @@ app.use(
  */
 
 process.on(
-
   "unhandledRejection",
 
-  function (
-    reason
-  ) {
+  function (reason) {
 
     console.error(
       "Unhandled promise rejection:",
@@ -4726,7 +3059,6 @@ process.on(
  */
 
 app.listen(
-
   PORT,
 
   function () {
